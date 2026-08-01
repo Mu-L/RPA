@@ -35,15 +35,15 @@ export class XDesktop extends XModule<NativeCVAPI> {
 	}
 
   checkUpdateLink (modVersion: string, extVersion: string): string {
-    return `https://goto.ui.vision/x/idehelp?help=xdesktop_updatecheck&xversion=${modVersion}&kantuversion=${extVersion}`
+    return `https://go.ui.vision/?help=xdesktop_updatecheck&xversion=${modVersion}&kantuversion=${extVersion}`
   }
 
   downloadLink (): string {
-    return 'https://goto.ui.vision/x/idehelp?help=xdesktop_download'
+    return 'https://go.ui.vision/?help=xdesktop_download'
   }
 
   infoLink (): string {
-    return 'https://goto.ui.vision/x/idehelp?help=xdesktop'
+    return 'https://go.ui.vision/?help=xdesktop'
   }
 }
 

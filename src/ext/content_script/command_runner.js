@@ -421,24 +421,45 @@ export const run = (command, csIpc, helpers) => {
         })
       })
     }
-    case 'saveItem':
+    case 'saveItem': {
+      // Download the element's actual file (original bytes, not a screenshot).
+      // A page-context <a download> click is ignored by Chrome for
+      // cross-origin URLs, so the download runs in the background service
+      // worker via chrome.downloads.download — works regardless of CORS/CSP.
+      return __getElementByLocator(target, extra.waitForVisible, command, csIpc)
+      .then(el => {
+        // <img>/<video>/<audio> (currentSrc honors srcset), or a link's href
+        const url = el.currentSrc || el.src || el.href
+        if (!url) {
+          throw new Error(`saveItem: element has no src or href to download`)
+        }
+
+        try {
+          if (extra.playScrollElementsIntoView) el.scrollIntoView({ block: 'center' })
+          if (extra.playHighlightElements)      helpers.highlightDom(el, HIGHLIGHT_TIMEOUT)
+        } catch (e) {
+          log.error('error in scroll and highlight')
+        }
+
+        // file name from the URL path; empty/invalid → Chrome picks one
+        let filename
+        try {
+          const path = new URL(url, window.location.href).pathname
+          filename = decodeURIComponent(path.substring(path.lastIndexOf('/') + 1))
+            .replace(/[\\/:*?"<>|]/g, '_') || undefined
+        } catch (e) {
+          filename = undefined
+        }
+
+        return csIpc.ask('CS_DOWNLOAD_URL', { url, filename })
+      })
+    }
     case 'click':
     case 'clickAndWait': {
       return __getElementByLocator(target, extra.waitForVisible, command, csIpc)
       .then(el => {
         try {
           if (extra.playScrollElementsIntoView) el.scrollIntoView({ block: 'center' })
-          if (command.cmd === 'saveItem') {
-            var img = el
-            var url = img.src
-            var filename = url.substring(url.lastIndexOf('/') + 1)
-            var a = document.createElement('a')
-            a.href = url;
-            a.download = filename
-            document.body.appendChild(a)
-            a.click();
-            document.body.removeChild(a)
-          }
           if (extra.playHighlightElements)      helpers.highlightDom(el, HIGHLIGHT_TIMEOUT)
         } catch (e) {
           log.error('error in scroll and highlight')
@@ -1331,7 +1352,8 @@ export const run = (command, csIpc, helpers) => {
       })
     }
 
-    case 'deleteAllCookies': {
+    case 'deleteCookies':
+    case 'deleteAllCookies': { // old name, kept working for existing macros
       return csIpc.ask('CS_DELETE_ALL_COOKIES', {
         url: window.location.origin
       })

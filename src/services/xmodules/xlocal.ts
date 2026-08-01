@@ -38,7 +38,7 @@ export class xLocal extends XModule<NativeFileAPI> {
         const fsAPI = getNativeFileSystemAPI()
         return fsAPI.getSpecialFolderPath({ folder: SpecialFolder.UserProfile })
         .then(profilePath => {
-          const uivision = path.join(profilePath, '\\AppData\\Roaming\\UI.Vision\\XModules\\ocr')
+          const uivision = path.join(profilePath, '\\AppData\\Roaming\\Ui.Vision\\XModules\\ocr')
           return fsAPI.ensureDir({ path: uivision })
           .then(Opath => {
            let path =uivision;
@@ -173,15 +173,15 @@ export class xLocal extends XModule<NativeFileAPI> {
   }
 
   checkUpdateLink (modVersion: string, extVersion: string): string {
-    return `https://goto.ui.vision/x/idehelp?help=xmodule-ocr_updatecheck&xversion=${modVersion}&kantuversion=${extVersion}`
+    return `https://go.ui.vision/?help=xmodule-ocr_updatecheck&xversion=${modVersion}&kantuversion=${extVersion}`
   }
 
   downloadLink (): string {
-    return 'https://goto.ui.vision/x/idehelp?help=xmodule-ocr_download'
+    return 'https://go.ui.vision/?help=xmodule-ocr_download'
   }
 
   infoLink (): string {
-    return 'https://goto.ui.vision/x/idehelp?help=xmodule-ocr'
+    return 'https://go.ui.vision/?help=xmodule-ocr'
   }
 }
 

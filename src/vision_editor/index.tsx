@@ -15,6 +15,7 @@ import { EditorState, Editor, PieceState, CannotCreateError } from './controller
 import { Point, BoxAnchorPosition, getAnchorRects as getAnchorRectsForBox } from './controllers/box';
 import { polyfillTimeoutFunctions } from '@/services/timeout/cs_timeout'
 import csIpc from '@/common/ipc/ipc_cs'
+import { installGoUivLinkDecorator } from '@/common/uiv_link'
 
 // import 'antd/dist/antd.css'
 import './index.scss'
@@ -22,6 +23,7 @@ import '../styles/antd-dark-theme.scss'
 import './dark-theme.scss'
 
 polyfillTimeoutFunctions(csIpc)
+installGoUivLinkDecorator()
 
 const rootEl = document.getElementById('root');
 const render = () => ReactDOM.render(
@@ -595,7 +597,7 @@ class App extends React.Component<Props, State> {
           <a
             className="editor-tips"
             target="_blank"
-            href="https://goto.ui.vision/x/idehelp?help=relative_clicks"
+            href="https://go.ui.vision/?help=relative_clicks"
           >
             Info: What are relative clicks?
           </a>

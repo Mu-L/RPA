@@ -3,7 +3,7 @@ import { ComputerVisionType, isCVTypeForDesktop } from './common/cv_utils';
 import { activateTab } from './common/tab_utils'
 import { getStorageManager } from './services/storage'
 import { getXDesktop } from './services/xmodules/xdesktop'
-import { getNativeCVAPI, convertImageSearchResultIfAllCoordiatesBasedOnTopLeftScreen, convertImageSearchResultForPage, ConvertResultItem } from './services/desktop'
+import { getNativeCVAPI, convertImageSearchResultIfAllCoordiatesBasedOnTopLeftScreen, ConvertResultItem } from './services/desktop'
 import { DesktopScreenshot } from './desktop_screenshot_editor/types'
 import { PageInfo, CaptureScreenshotService, scaleDataURI } from './common/capture_screenshot'
 import { Rect, Point } from './common/types'
@@ -11,6 +11,7 @@ import * as C from './common/constant'
 import { Ipc } from './common/ipc/ipc_promise';
 import { getState } from './ext/common/global_state'
 import { getPlayTabIpc } from './ext/common/tab'
+import { searchImageInExtension } from './services/vision/adaptor'
 
 export type SearchVisionParams = {
   visionFileName: string;
@@ -100,50 +101,42 @@ export function searchVision(args: SearchVisionParams): Promise<SearchVisionResu
 
       case 'browser':
       default:
-        return getXDesktop().sanityCheck()
-        .then(() => Promise.all([
-          // DPI is bound to window.devicePixelRatio, here scale both pattern image and screenshot image to the page DPI
-          // so if it's a retina device, the image sizes here are 2x of the css size
-          getPatternImage(visionFileName).then(dataUrl => scaleDataURI(dataUrl as string, pageDpi / patternDpi)),
+        // Browser scope always uses the in-extension WASM matcher — even when
+        // the DesktopAutomation XModule is installed. One engine, identical
+        // results for everyone, no native install needed; the XModule is only
+        // used for desktop scope (screen capture + OS-level input) above.
+        // The pattern is loaded UN-resized: the engine applies the
+        // pattern→page DPI scale itself (searchImageScaled) AFTER green/pink
+        // box detection — prescaling here interpolates away the exact box
+        // colors on Retina/HiDPI and causes E601 (the native host has no
+        // searchImageScaled equivalent, which is why it was dropped here; see
+        // uivision-wasm docs/fix-e601-green-pink-dpi.md).
+        return Promise.all([
+          getPatternImage(visionFileName),
           getScreenshotInSearchArea({ searchArea, storedImageRect, devicePixelRatio, captureScreenshotService, dpiScale: 1 })
-        ]))
-        .then(async ([patternImageUrl, targetImageInfo]) => {
-          const targetImageUrl  = targetImageInfo.dataUrl
-          const pageOffset      = targetImageInfo.offset
-          const viewportOffset  = targetImageInfo.viewportOffset
-          const patternImage    = await getNativeCVAPI().getImageFromDataUrl(patternImageUrl as string, patternDpi)
-          const screenshotImage = await getNativeCVAPI().getImageFromDataUrl(targetImageUrl, patternDpi)
-          const searchResult    = await getNativeCVAPI().searchImageWithGuard({
-            image: screenshotImage,
-            pattern: patternImage,
-            options: {
-              minSimilarity,
-              enableGreenPinkBoxes,
-              requireGreenPinkBoxes,
-              searchArea:         searchAreaRect,
-              enableHighDpi:      true,
-              allowSizeVariation: true,
-              saveCaptureOnDisk:  true,
-              limitSearchArea:    !isFullScreenshot
-            }
+        ])
+        .then(([patternDataUrl, targetImageInfo]) => {
+          return searchImageInExtension({
+            patternImageUrl: patternDataUrl as string,
+            targetImageUrl: targetImageInfo.dataUrl,
+            minSimilarity,
+            allowSizeVariation: true,
+            enableGreenPinkBoxes,
+            requireGreenPinkBoxes,
+            patternScale: pageDpi / patternDpi,
+            // NEVER pass searchAreaRect here: every non-full browser capture
+            // mode ('rect', '.png', 'element:') already delivers the CROPPED
+            // area as the target image, with offsets rebased to the crop —
+            // cropping again inside the matcher cuts the area out of its own
+            // crop (a rect whose origin exceeds its size crops to nothing,
+            // which is how {area}-limited finds matched nothing). The desktop
+            // branch above is different: its capture is the full screen, so
+            // the native matcher does need the rect.
+            searchAreaRect: undefined,
+            scaleDownRatio: window.devicePixelRatio,
+            pageOffset: targetImageInfo.offset,
+            viewportOffset: targetImageInfo.viewportOffset
           })
-
-          // Resize all cooridinates from screen based to css based
-          return convertImageSearchResultForPage(searchResult, 1 / window.devicePixelRatio , pageOffset, viewportOffset)
-          // return searchImage({
-          //   targetImageUrl,
-          //   minSimilarity,
-          //   enableGreenPinkBoxes,
-          //   requireGreenPinkBoxes,
-          //   patternImageUrl: patternImageUrl as string,
-          //   allowSizeVariation: true,
-          //   scaleDownRatio: dpiScale * window.devicePixelRatio,
-          //   pageOffsetX: pageOffset.x || 0,
-          //   pageOffsetY: pageOffset.y || 0,
-          //   viewportOffsetX: viewportOffset.x || 0,
-          //   viewportOffsetY: viewportOffset.y || 0
-          // })
-          // .then(regions => regions.map(matched => ({ matched, reference: null })))
         })
     }
   })()

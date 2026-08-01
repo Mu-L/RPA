@@ -18,6 +18,24 @@ export const activateTab = (tabId: number, focusWindow: boolean = false): Promis
   })
 }
 
+// never target an extension page (side panel / IDE opened as a tab) or a
+// browser special page — content scripts cannot run there
+export const isWebTab = (tab: any): boolean => {
+  return !!tab && !/^(chrome|moz|edge)-extension:|^(chrome|about|edge):/.test(tab.url || '')
+}
+
+// The tab a run should target: the focused window's active web tab.
+// Ext.tabs.query({ active: true }) alone returns one active tab PER WINDOW in
+// window order (not recency) — with an IDE window or an unrelated window
+// around, tabs[0] can be the wrong window's tab (or an extension page).
+export const getActiveWebTab = async (): Promise<any | null> => {
+  const focused = (await Ext.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => [])).filter(isWebTab)
+  if (focused.length) return focused[0]
+
+  const active = (await Ext.tabs.query({ active: true }).catch(() => [])).filter(isWebTab)
+  return active.length ? active[0] : null
+}
+
 export const getTab = async (tabId: number): Promise<any> => {
   try { 
     return Ext.tabs.get(tabId)

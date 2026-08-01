@@ -1,8 +1,6 @@
-import { TestSuite } from "@/common/convert_suite_utils";
 import { Command } from "@/services/player/macro";
 import { MacroExtraData } from "@/services/kv_data/macro_extra_data";
 import { EntryNode } from "@/services/storage/std/standard_storage";
-import { TestSuitExtraData } from "@/services/kv_data/test_suite_extra_data";
 import { ProxyData } from "@/services/proxy/types";
 import * as C from '../common/constant'
 import { Macro } from "@/common/convert_utils";
@@ -92,12 +90,9 @@ export type State = {
   replaySpeedOverrideToFastMode: boolean;
 
   editor: {
-    testSuites:                TestSuite[];
     testCases:                 MacroInState[];
     macrosExtra:               Record<ID, FolderExtraData | MacroExtraData>;
     macroFolderStructure:      EntryNode[];
-    testSuitesExtra:           Record<ID, TestSuitExtraData>;
-    testSuitesFolderStructure: EntryNode[];
     currentMacro:              Macro | null;
     editing: Editing;
     editingSource: {
@@ -109,7 +104,7 @@ export type State = {
     clipboard: {
       commands: Command[];
     };
-    activeTab: 'table_view' | 'source_view';
+    activeTab: 'table_view' | 'source_view' | 'script_view';
     isDraggingCommand: boolean;
   };
 
@@ -143,11 +138,7 @@ export type State = {
 }
 
 export type UIConfig = {
-  newPreinstallVersion?: boolean;
-  showSettings?: boolean;
-  settingsTab?: string;
   sidebarTab?: 'Macro';
-  showWebsiteWhiteList?: boolean;
   showXFileNotInstalledDialog?: boolean;
   focusArea?: FocusArea;
   isSaving?: boolean;
@@ -190,7 +181,6 @@ export const initialState: State = {
   ocrInDesktopMode: false,
   replaySpeedOverrideToFastMode: false,
   editor: {
-    testSuites: [],
     testCases: [],
     currentMacro: null,
     // macrosExtra is used to store:
@@ -202,10 +192,7 @@ export const initialState: State = {
     macrosExtra: {},
     // `macroFolderStructure` just holds folder and path info,
     // while macro content is still in `testCases`.
-    // Similar case for `testSuitesFolderStructure`
     macroFolderStructure: [],
-    testSuitesExtra: {},
-    testSuitesFolderStructure: [],
     editing: {
       ...newTestCaseEditing
     },

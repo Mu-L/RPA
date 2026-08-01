@@ -41,6 +41,14 @@
       transform: translateY(-50%);
     }
 
+    // JS script macros: outline file-with-code icon (Font Awesome
+    // faFileCode). Monochrome on purpose — it should read as "file type",
+    // not as a highlight.
+    .js-file-icon {
+      height: 15px;
+      color: #4a4a44;
+    }
+
     &:hover .more-button {
       display: block;
     }
@@ -190,4 +198,8 @@
   .tree-node .tree-node .tree-node .tree-node .tree-node .tree-node .tree-node .tree-node .tree-node .tree-node .tree-node .tree-node-content {
     padding-left: 10 * 15px + 10px;
   }
+}
+
+html[data-theme='dark'] .file-root .tree-node-content .js-file-icon {
+  color: #bbb;
 }

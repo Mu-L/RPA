@@ -50,7 +50,7 @@ export const getOcrResponse = ({
       let stateConfig = store.getState().config
       console.log('config :>> ', config)
       console.log('stateConfig :>> ', stateConfig)
-      const { ocrMode, ocrEngine, ocrSpaceApiKey, ocrOfflineURL, ocrOfflineAPIKey } = stateConfig
+      const { ocrMode, ocrEngine, ocrSpaceApiKey } = stateConfig
 
       console.log('ocrMode :>> ', ocrMode)
 
@@ -91,45 +91,17 @@ export const getOcrResponse = ({
           return Promise.resolve(next)
         }
 
-        case 'offline_enabled': {
-          if (!/^https?:\/\//.test(ocrOfflineURL)) {
-            throw new Error('Please set local OCR API first')
-          }
-
-          if (!ocrOfflineAPIKey || !ocrOfflineAPIKey.length) {
-            throw new Error('Please set local OCR API key first')
-          }
-
-          return Promise.resolve({
-            url: ocrOfflineURL,
-            key: ocrOfflineAPIKey
-          })
-        }
-
         default: {
           throw new Error('Please enable OCR first')
         }
       }
     }
 
-    const prepare = (() => {
-      // If version is not free version and the user reaches the 100th online OCR conversions,
-      // then - before making the 101 conversion - call the API for a license check.
-      // Of course, only if we've cached the license key and previous license check result
-      if (getLicenseService().hasNoLicense() || ocrCmdCounter.get() !== config.xmodulesLimit.unregistered.ocrCommandCount) {
-        return Promise.resolve()
-      }
-
-      return getLicenseService()
-        .recheckLicenseIfPossible()
-        .then(() => {
-          const isExpired = getLicenseService().isLicenseExpired()
-
-          if (isExpired) {
-            throw new Error('Activation check failed. Reset to free edition. If you believe this was an error, please contact tech support')
-          }
-        })
-    })()
+    // There used to be a licence re-check here, fired on the conversion that
+    // crossed the free OCR quota. The quota is gone (the config number it
+    // compared against was already Infinity, so the branch had been dead), and
+    // with it the reason to re-check mid-run.
+    const prepare = Promise.resolve()
 
     let dataURLObjPromise = imageDataUrl
       ? Promise.resolve({ dataUrl: imageDataUrl })

@@ -32,15 +32,15 @@ export class XScreenCapture extends XModule<NativeScreenCapture> {
 	}
 
   checkUpdateLink (modVersion: string, extVersion: string): string {
-    return `https://goto.ui.vision/x/idehelp?help=xscreencapture_updatecheck&xversion=${modVersion}&kantuversion=${extVersion}`
+    return `https://go.ui.vision/?help=xscreencapture_updatecheck&xversion=${modVersion}&kantuversion=${extVersion}`
   }
 
   downloadLink (): string {
-    return 'https://goto.ui.vision/x/idehelp?help=xscreencapture_download'
+    return 'https://go.ui.vision/?help=xscreencapture_download'
   }
 
   infoLink (): string {
-    return 'https://goto.ui.vision/x/idehelp?help=xscreencapture'
+    return 'https://go.ui.vision/?help=xscreencapture'
   }
 }
 

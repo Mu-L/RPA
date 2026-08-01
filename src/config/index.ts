@@ -4,39 +4,40 @@ const platform = Ext.isFirefox() ? 'firefox' : 'chrome'
 
 export default {
   preinstall: {
-    version: '5.8.8',
-    macroFolder: '/Demo'
+    // 9.9.9: the Classic and JS folders moved below one root folder,
+    // "Demo and QA Test Scripts", so the tree opens with the user's own
+    // macros at the root. Existing installs are re-offered the demos at the
+    // new place; the old top-level folders stay until deleted by hand.
+    // 9.9.10: the JS demos compose relative clicks from plain anchor images
+    // (slider_warmth / draw_toolbar_top) + uiv.offset — existing installs
+    // need the re-offer to receive those two new vision images.
+    // 9.9.11: Chrome-only demos live in "Browser Vision (Chrome, Edge)";
+    // the Core demos use plain DOM input and run on Firefox too, with
+    // *Chrome variants for trusted CDP input.
+    // 9.9.12: demo csv/vision resources install into the CURRENT storage
+    // mode — file-mode installs that took 9.9.11 got the macros but not the
+    // images they search for, so the offer must fire once more.
+    version: '9.9.12',
+    macroFolder: '/'
   },
   nativeMessaging: {
     idleTimeBeforeDisconnect: 1e4 // 10 seconds
   },
-  urlAfterUpgrade: 'https://goto.ui.vision/x/idehelp?help=k_update',
-  urlAfterInstall: 'https://goto.ui.vision/x/idehelp?help=k_welcome',
-  urlAfterUninstall: 'https://goto.ui.vision/x/idehelp?help=k_why',
+  urlAfterUpgrade: 'https://go.ui.vision/?help=k_update',
+  urlAfterInstall: 'https://go.ui.vision/?help=k_welcome',
+  urlAfterUninstall: 'https://go.ui.vision/?help=k_why',
   performanceLimit: {
     fileCount: Infinity
   },
   xmodulesLimit: {
     unregistered: {
-      ocrCommandCount: Infinity,
-      xCommandCount: Infinity,
-      xFileMacroCount: Infinity,
-      proxyExecCount: Infinity,
-      upgradeUrl: 'https://goto.ui.vision/x/idehelp?help=k_xupgradepro'
+      upgradeUrl: 'https://go.ui.vision/?help=k_xupgradepro'
     },
     free: {
-      ocrCommandCount: Infinity,
-      xCommandCount: Infinity,
-      xFileMacroCount: Infinity,
-      proxyExecCount: Infinity,
-      upgradeUrl: 'https://goto.ui.vision/x/idehelp?help=k_xupgradepro'
+      upgradeUrl: 'https://go.ui.vision/?help=k_xupgradepro'
     },
     pro: {
-      ocrCommandCount: Infinity,
-      xCommandCount: Infinity,
-      xFileMacroCount: Infinity,
-      proxyExecCount: Infinity,
-      upgradeUrl: 'https://goto.ui.vision/x/idehelp?help=k_xupgrade_contactsupport'
+      upgradeUrl: 'https://go.ui.vision/?help=k_xupgrade_contactsupport'
     }
   },
   xfile: {

@@ -25,16 +25,20 @@ import { setProxy, getProxyManager } from '../services/proxy'
 import { LogService } from '../services/log'
 import { getContextMenuService } from '../services/contextMenu'
 import { getState, updateState } from './common/global_state'
-import { genGetTabIpc, getActiveTab, getActiveTabId, getPlayTab, showPanelWindow, withPanelIpc } from './common/tab'
+import { genGetTabIpc, getActiveTab, getActiveTabId, getPlayTab, openSettings, showPanelWindow, withPanelIpc } from './common/tab'
 import { DownloadMan } from '../common/download_man'
 import { SIDEPANEL_TAB_ID } from '../common/ipc/ipc_bg_cs'
 import { checkIfSidePanelOpen } from '@/ext/common/sidepanel'
 import interceptLog from '@/common/intercept_log'
 import { getWindowSize } from '../common/resize_window'
+import { markAutomationTab, unmarkAutomationTabs, bindAutomationTabMarkEvents, markIdleTab, unmarkIdleTab } from './automation_tab_mark'
 
 const downloadMan = new DownloadMan();
 
 interceptLog()
+
+// tab-strip group + glow border for the tab being recorded/replayed
+bindAutomationTabMarkEvents()
 
 const checkTaIsPresent = async(idexId,wid) => {
   return new Promise((resolve,reject) => {
@@ -321,6 +325,75 @@ const closeSidePanel = () => {
   }
 }
 
+// Try to open the side panel on the given tab (sidebar-first run surface).
+// MUST be called synchronously while handling the message triggered by the
+// user's click (e.g. a bookmark run) — chrome.sidePanel.open() rejects once
+// the user gesture is gone, which happens after any `await`.
+// Resolves to true if the side panel is opening.
+// Green "idle" tab mark: while the side panel is open and nothing is being
+// recorded/replayed, mark the currently active tab so the user can see which
+// tab Ui.Vision is pointing at. Recording/replay marks take over automatically
+// (markAutomationTab with a different mode clears the idle mark first).
+// true while the sidebar AI macro agent is working (PANEL_AI_TAB_MARK):
+// replays it starts get the orange 'ai' tab mark instead of blue, and stopping
+// such a replay keeps the mark — the agent's turn is not over yet.
+// Module-local on purpose: an MV3 worker restart mid-turn just falls back to
+// the normal replay marks.
+let aiTabMarkActive = false
+
+// true while a JS script is running. A script dispatches every uiv.* call as
+// its own player run, so the normal per-run mark/unmark would create and
+// dissolve a Chrome tab group AND inject the border script three times for
+// EVERY line — hundreds of milliseconds of pure decoration per command, plus a
+// flickering tab strip. Instead the mark is held for the whole script: the
+// first command marks the tab, this flag stops the per-command unmark (which
+// makes every later mark a no-op — markAutomationTab returns early when the
+// tab is already marked), and the runner clears it once when the script ends.
+let scriptRunActive = false
+
+const idleMarkGuard = (tab) => {
+  return !!tab && !!tab.id && !!tab.url &&
+    tab.url.indexOf(Ext.runtime.getURL('')) === -1
+}
+
+const restoreIdleTabMark = () => {
+  return checkIfSidePanelOpen()
+  .then(isOpen => {
+    // panel closed: sweep any stale green mark. This is what removes marks
+    // left behind when the service worker was dead at the moment the panel
+    // closed (port.onDisconnect never fired then).
+    if (!isOpen) return unmarkIdleTab()
+    return getCurrentTab()
+    .then(tab => {
+      if (idleMarkGuard(tab)) {
+        return markIdleTab(tab.id)
+      }
+    })
+  })
+  .catch(() => {})
+}
+
+const tryOpenSidePanelForRun = (tabId) => {
+  try {
+    if (!tabId || Ext.isFirefox() || typeof chrome === 'undefined' || !chrome.sidePanel || !chrome.sidePanel.open) {
+      return Promise.resolve(false)
+    }
+
+    // fire-and-forget on purpose: awaiting setOptions would lose the gesture
+    chrome.sidePanel.setOptions({ enabled: true })
+
+    return chrome.sidePanel.open({ tabId }).then(
+      () => true,
+      (e) => {
+        log.warn(`could not open side panel for run, falling back to IDE window: ${e && e.message}`)
+        return false
+      }
+    )
+  } catch (e) {
+    return Promise.resolve(false)
+  }
+}
+
 const bindEvents = () => {
   Ext.action.onClicked.addListener((tab) => {
     if(Ext.isFirefox()) {
@@ -432,6 +505,15 @@ const bindEvents = () => {
     }
     if (tabId === state.tabIds.panel && !state.closingAllWindows) {
       logKantuClosing()
+
+      // Note: sidebar-first design — the side panel stays open while the editor
+      // window is popped out, and the editor window registers itself as the
+      // panel (I_AM_PANEL). If the editor window closes while the side panel is
+      // still connected, hand panel routing back to the side panel, otherwise
+      // recording/inspect/invoke would target a dead tab.
+      if (isSidePanelOpen && tabId !== SIDEPANEL_TAB_ID) {
+        updateState(setIn(['tabIds', 'panel'], SIDEPANEL_TAB_ID))
+      }
     }
   })
 
@@ -445,44 +527,41 @@ const bindEvents = () => {
     })
   })
 
-  // it caused issues in chrome:
-  // storage.addListener(([storage]) => {
-  //   console.log('storage changed:>> ', storage)
-  //   if (storage.key === 'config' && storage.newValue.showSidePanel !== storage.oldValue.showSidePanel) {
-  //     showSidePanel = storage.newValue.showSidePanel
-  //     ;getState().then((state) => {
-  //       isSidePanelOpen = state.tabIds.panel === SIDEPANEL_TAB_ID
-  //     })
-  //   }
-  // })
-
   const getCalculatedShowSidePanelValue =  (config) => {
-    let value = false;
     if (config) {
       if (config.oneTimeShowSidePanel &&  [true, false].includes(config.oneTimeShowSidePanel)) {
-        value = config.oneTimeShowSidePanel;
-      } else {
-        value = config.showSidePanel;
+        return config.oneTimeShowSidePanel;
+      }
+      if ([true, false].includes(config.showSidePanel)) {
+        return config.showSidePanel;
       }
     }
-    return value;
+    // no stored preference yet (fresh install, before the panel page has ever run):
+    // side panel is the default entry point
+    return true;
   }
 
-  if (Ext.isFirefox()) {
-    storage.addListener(([storage]) => {
-      if (storage.key === 'config' ) {
-        console.log('config changed:>> ', storage)
-        if (storage.newValue.oneTimeShowSidePanel !== storage.oldValue.oneTimeShowSidePanel &&  [true, false].includes(storage.newValue.oneTimeShowSidePanel)) {
-          showSidePanel = storage.newValue.oneTimeShowSidePanel          
-        } else {
-          showSidePanel = storage.newValue.showSidePanel
-          ;getState().then((state) => {
-            isSidePanelOpen = state.tabIds.panel === SIDEPANEL_TAB_ID
-          })
-        }
-      }
-    })
-  }
+  // Keep the cached showSidePanel in sync with config written by ANY page.
+  // It cannot be read inside the icon-click handler — any await before
+  // Ext.sidePanel.open() voids the user gesture — so the value must already
+  // be correct by then. Refreshing only on focus/tab-activation was not
+  // enough once Settings moved into a browser TAB: unchecking "Open Side
+  // Panel by default" and clicking the toolbar icon in the same window fires
+  // neither event, so the icon kept using the previous value.
+  // (An older version of this listener compared against storage.oldValue,
+  // which is undefined the first time a key is written — that is the Chrome
+  // breakage it was disabled for. Recomputing from newValue avoids it.)
+  storage.addListener((changes) => {
+    const configChange = (changes || []).find(c => c && c.key === 'config')
+    if (!configChange || !configChange.newValue) return
+
+    showSidePanel = getCalculatedShowSidePanelValue(configChange.newValue)
+    manageKeepSWAlive()
+
+    getState().then((state) => {
+      isSidePanelOpen = state.tabIds.panel === SIDEPANEL_TAB_ID
+    }, () => {})
+  })
 
   // these three variables are used for the feature of opening side panel on icon click according to the settings stored in storage->config
   // using async functions to get the active tab id, and the showSidePanel variable from storage config will cause an error.
@@ -524,6 +603,15 @@ const bindEvents = () => {
       manageKeepSWAlive()
   });
 
+  // also run once at service worker start, so a fresh install answers the very
+  // first icon click correctly (onStartup does not fire on install)
+  manageKeepSWAlive()
+
+  // every service worker start: re-mark the active tab if the side panel is
+  // open, or sweep stale green "Ui.Vision" groups if it is not (they survive
+  // in the tab strip when the worker was dead while the panel closed)
+  restoreIdleTabMark()
+
   // Note: set the activated tab as the one to play
   Ext.tabs.onActivated.addListener(async (activeInfo) => {
     manageKeepSWAlive()
@@ -535,6 +623,14 @@ const bindEvents = () => {
 
     checkIfSidePanelOpen().then((isOpen) => {
       isSidePanelOpen = isOpen
+
+      // idle mark follows the active tab (only while idle + side panel open)
+      if (isOpen &&
+          state.status === C.APP_STATUS.NORMAL &&
+          activeInfo.tabId !== state.tabIds.panel &&
+          idleMarkGuard(tab)) {
+        markIdleTab(activeInfo.tabId)
+      }
     })
 
     if (activeInfo.tabId === state.tabIds.panel ||
@@ -638,6 +734,7 @@ const bindEvents = () => {
 
             // update recording tab
             await updateState(setIn(['tabIds', 'toRecord'], activeInfo.tabId))
+            markAutomationTab(activeInfo.tabId, 'recording')
 
             if (oldTab.windowId === newTab.windowId) {
               result.push(`tab=${newTab.index - oldTab.index}`)
@@ -679,9 +776,37 @@ const bindEvents = () => {
     if (port.name === SIDEPANEL_PORT_NAME) {
       console.log('side panel connected')
       isSidePanelOpen = true
+
+      // side panel just opened — mark the active tab (green) if we're idle
+      getState().then(state => {
+        if (state.status !== C.APP_STATUS.NORMAL) return
+        return getCurrentTab().then(tab => {
+          if (idleMarkGuard(tab)) {
+            markIdleTab(tab.id)
+          }
+        })
+      }).catch(() => {})
+
       port.onDisconnect.addListener(async () => {
         console.log('side panel disconnected')
         isSidePanelOpen = false
+        unmarkIdleTab()
+
+        // Note: sidebar-first design — side panel and editor window can be open
+        // at the same time. If the side panel closes while it holds panel
+        // routing, hand it over to the (still open) editor window if there is one.
+        const state = await getState()
+        if (state.tabIds.panel === SIDEPANEL_TAB_ID && state.tabIds.lastPanelWindow) {
+          try {
+            const tab = await Ext.tabs.get(state.tabIds.lastPanelWindow)
+            const url = (tab && (tab.url || tab.pendingUrl)) || ''
+            if (url.indexOf('popup.html') !== -1) {
+              await updateState(setIn(['tabIds', 'panel'], state.tabIds.lastPanelWindow))
+            }
+          } catch (e) {
+            // no editor window open — nothing to hand over to
+          }
+        }
       });
     }
   });
@@ -838,10 +963,23 @@ const pacListener = (data) => {
   }
 }
 
+// Synchronous pre-dispatch: work that must happen while the user gesture of
+// the triggering click is still valid — i.e. before the FIRST await (the async
+// processor below starts with one). chrome.sidePanel.open() rejects without a
+// gesture, so for macro runs coming from a page (bookmark / autostart html)
+// the side panel open must be kicked off right here.
+const onRequest = (cmd, args) => {
+  if (cmd === 'CS_INVOKE' || cmd === 'CS_IMPORT_AND_INVOKE') {
+    args._pSidePanelOpening = tryOpenSidePanelForRun(args && args.sender && args.sender.tab && args.sender.tab.id)
+  }
+
+  return onRequestAsync(cmd, args)
+}
+
 // Processor for all message background could receive
 // All messages from panel starts with 'PANEL_'
 // All messages from content script starts with 'CS_'
-const onRequest = async (cmd, args) => {
+const onRequestAsync = async (cmd, args) => {
   const state = await getState()
 
   if (cmd !== 'CS_ACTIVATE_ME' && cmd !== 'TIMEOUT') {
@@ -893,14 +1031,26 @@ const onRequest = async (cmd, args) => {
     // }
 
     case 'PANEL_CAPTURE_VISIBLE_TAB': {
-      return Ext.tabs.captureVisibleTab(args.windowId, args.options).catch(e => {
-        console.log('captureVisibleTab e:>>', e)
-        if(e == "Error: Missing activeTab permission"){
-          throw new Error('Error E144: Screenshot permission issue. To fix, please reload extension.' + 
-            'To do so, go to extension settings and turn the blue switch OFF and then ON again.')
-        } 
-        throw e;
-      })
+      // Chrome caps captureVisibleTab at ~2 calls/sec per extension. The panel
+      // side throttles, but this funnel also serves callers outside that
+      // throttle — on a quota error, wait a slot and retry instead of failing
+      // the macro command.
+      const captureWithRetry = (retriesLeft) => {
+        return Ext.tabs.captureVisibleTab(args.windowId, args.options).catch(e => {
+          console.log('captureVisibleTab e:>>', e)
+          const msg = (e && e.message) || String(e)
+          if (/MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND/.test(msg) && retriesLeft > 0) {
+            return new Promise(resolve => setTimeout(resolve, 700))
+              .then(() => captureWithRetry(retriesLeft - 1))
+          }
+          if(e == "Error: Missing activeTab permission"){
+            throw new Error('Error E144: Screenshot permission issue. To fix, please reload extension.' +
+              'To do so, go to extension settings and turn the blue switch OFF and then ON again.')
+          }
+          throw e;
+        })
+      }
+      return captureWithRetry(2)
     }
 
     case 'PANEL_SET_PROXY': {
@@ -947,14 +1097,6 @@ const onRequest = async (cmd, args) => {
       toggleRecordingBadge(true)
 
       const menuInfos = [{
-        id: 'verifyText',
-        title: 'Verify Text',
-        contexts: ['page', 'selection']
-      }, {
-        id: 'verifyTitle',
-        title: 'Verify Title',
-        contexts: ['page', 'selection']
-      }, {
         id: 'assertText',
         title: 'Assert Text',
         contexts: ['page', 'selection']
@@ -978,6 +1120,7 @@ const onRequest = async (cmd, args) => {
 
       if (lastActivatedTabId) {
         activateTab(lastActivatedTabId, true)
+        .then(() => markAutomationTab(lastActivatedTabId, 'recording'))
         .catch(e => {
           log.warn(`Failed to activate current tab: ${e.message}`)
         })
@@ -1009,6 +1152,7 @@ const onRequest = async (cmd, args) => {
       }))
 
       toggleRecordingBadge(false)
+      unmarkAutomationTabs().then(restoreIdleTabMark)
       return true
 
     case 'PANEL_TRY_TO_RECORD_OPEN_COMMAND': {
@@ -1033,6 +1177,8 @@ const onRequest = async (cmd, args) => {
             firstRecord: tab.id
           }
         }))
+
+        markAutomationTab(tab.id, 'recording')
 
         getPanelTabIpc()
         .then(panelIpc => {
@@ -1087,8 +1233,16 @@ const onRequest = async (cmd, args) => {
       
       setInspectorTabId(null, true)
       togglePlayingBadge(true)
-      // Note: reset download manager to clear any previous downloads
-      getDownloadMan().reset()
+
+      // mark the tab being replayed (blue group + border); the tab id is set
+      // by the panel right before it starts the player
+      getState().then(state => markAutomationTab(state.tabIds.toPlay, aiTabMarkActive ? 'ai' : 'playing'))
+
+      // Note: reset download manager to clear any previous downloads — but
+      // NOT mid JS-script: every player-path uiv.* call STARTs/STOPs its own
+      // run, and wiping here killed a download armed one call earlier
+      // (uiv.download's arm, or uiv.run('onDownload') before a click)
+      if (!scriptRunActive) getDownloadMan().reset()
       // Re-check log service to see if xfile is ready to write log
       getLogServiceForBg().check()
 
@@ -1126,9 +1280,16 @@ const onRequest = async (cmd, args) => {
       .then(ipc => ipc.ask('SET_STATUS', { status: C.CONTENT_SCRIPT_STATUS.NORMAL }, C.CS_IPC_TIMEOUT))
 
       togglePlayingBadge(false)
+      // Keep the mark when the run is one step of something longer: an AI
+      // agent turn (cleared by PANEL_AI_TAB_MARK) or a JS script, whose every
+      // uiv.* call is its own run (cleared by PANEL_SCRIPT_RUN_MARK)
+      if (!aiTabMarkActive && !scriptRunActive) {
+        unmarkAutomationTabs().then(restoreIdleTabMark)
+      }
 
-      // Note: reset download manager to clear any previous downloads
-      getDownloadMan().reset()
+      // Note: reset download manager to clear any previous downloads — same
+      // JS-script exception as in PANEL_START_PLAYING above
+      if (!scriptRunActive) getDownloadMan().reset()
 
       if (state.timer) clearInterval(state.timer)
 
@@ -1188,6 +1349,11 @@ const onRequest = async (cmd, args) => {
     case 'PANEL_HIGHLIGHT_X': {
       return getPlayTabIpc()
       .then(ipc => ipc.ask('HIGHLIGHT_X', args, C.CS_IPC_TIMEOUT))
+    }
+
+    case 'PANEL_SHOW_BROWSER_CURSOR': {
+      return getPlayTabIpc()
+      .then(ipc => ipc.ask('SHOW_BROWSER_CURSOR', args, C.CS_IPC_TIMEOUT))
     }
 
     case 'PANEL_HIGHLIGHT_RECTS': {
@@ -1264,6 +1430,41 @@ const onRequest = async (cmd, args) => {
           height: args.size.height
         }))
       })
+    }
+
+    case 'PANEL_AI_TAB_MARK': {
+      // Orange mark (tab group + page border) on the tab the sidebar AI agent
+      // is working on, held for the whole agent turn — same orange as the AI
+      // chat's action text, so the user can connect the two.
+      aiTabMarkActive = !!args.marked
+
+      if (!args.marked) {
+        return unmarkAutomationTabs().then(restoreIdleTabMark).then(() => true)
+      }
+
+      return getCurrentTab().then(tab => {
+        if (!idleMarkGuard(tab)) return false
+        return markAutomationTab(tab.id, 'ai').then(() => true)
+      })
+    }
+
+    case 'PANEL_SCRIPT_RUN_MARK': {
+      // Held for a whole JS script run — see scriptRunActive above. The mark
+      // itself is applied by the first command's PANEL_START_PLAYING; this
+      // only keeps the per-command stops from tearing it down again.
+      scriptRunActive = !!args.marked
+
+      // download-manager hygiene at the script boundary: per-command resets
+      // are skipped while the script runs (see PANEL_START/STOP_PLAYING), so
+      // clear leftovers here — on start (a previous run may have died armed)
+      // and on end
+      getDownloadMan().reset()
+
+      if (!args.marked && !aiTabMarkActive) {
+        return unmarkAutomationTabs().then(restoreIdleTabMark).then(() => true)
+      }
+
+      return true
     }
 
     case 'PANEL_UPDATE_BADGE': {
@@ -1771,16 +1972,27 @@ const onRequest = async (cmd, args) => {
       }
 
       const runWithTab = (pTab) => {
-        return pTab.then(tab => {
+        return pTab.then(async (tab) => {
           log('getCurrentTab - ', tab)
 
-          const isValidTab    = !!tab && !!tab.id
-          const isPanelTab    = isValidTab && tab.id === state.tabIds.panel
+          const isUsableTab = (t) => !!t && !!t.id &&
+            t.id !== state.tabIds.panel &&
+            (t.url || '').indexOf(Ext.runtime.getURL('')) === -1
+
+          // e.g. on macOS the IDE window can be the last-focused window when
+          // the played tab closes — writing null here made the very next
+          // command fail with "Error #180: No connection to browser tab".
+          // Fall back to the focused normal window's active tab first.
+          if (!isUsableTab(tab)) {
+            tab = await Ext.windows.getLastFocused({ populate: true, windowTypes: ['normal'] })
+              .then(win => ((win && win.tabs) || []).find(t => t.active))
+              .catch(() => null)
+          }
 
           return updateState(
             setIn(
               ['tabIds', 'toPlay'],
-              (isValidTab && !isPanelTab) ? tab.id : null
+              isUsableTab(tab) ? tab.id : null
             )
           )
         })
@@ -1899,6 +2111,9 @@ const onRequest = async (cmd, args) => {
             }
           }))
 
+          // selectWindow switched the replay to another tab — mark it too
+          markAutomationTab(tab.id, aiTabMarkActive ? 'ai' : 'playing')
+
           return activateTab(tab.id)
         })
       })
@@ -1906,41 +2121,39 @@ const onRequest = async (cmd, args) => {
         if (e.message.includes('DOM failed to be ready in')) {
           throw e
         } 
-        //new Error(`failed to find the tab with locator '${args.target}'`)
-         /*IN case when index 0 tab not found*/
-        return Promise.all([
-            Ext.windows.getCurrent()
-          ])
-          .then((window) => {  
-        return Ext.tabs.query({ active: true, windowId: window.id })
-        .then(async (tabs) => {
-        if (!tabs || !tabs.length)  return false
-          log('in initPlayTab, set toPlay to', tabs[0])
-          const ctab  = tabs.filter(r => r.active === true && r.url.indexOf('chrome-extension://')==-1)
-          const offset = parseInt(locator, 10);
-          let wt = await checkTaIsPresent(ctab[0].index+offset,tabs[0].windowId);
-          let tab = wt == "" ? ctab[0] : wt;
-          if((tab.index  == 0 && offset == 0) || wt !=""){//when playtab index is 0
-            await updateState(state => ({
-              ...state,
-            tabIds: {
-            ...state.tabIds,
-              lastPlay: state.tabIds.toPlay,
-              toPlay: tab.id,
-              firstPlay: ctab[0].id
+         /*In case when index 0 tab not found: re-anchor on the focused normal
+           window's active web tab. Previous version passed the un-destructured
+           Promise.all array as `window` (windowId ended up undefined, so the
+           query returned one active tab per window in window order) and mixed
+           tabs[0].windowId with ctab[0].index — on multi-window setups (e.g.
+           macOS with the IDE window or an unrelated window first) it targeted
+           a tab in the wrong window. */
+        return Ext.windows.getLastFocused({ populate: true, windowTypes: ['normal'] })
+          .then(async (win) => {
+            const tabs = (win && win.tabs) || []
+            const ctab = tabs.filter(r => r.active === true && r.url.indexOf('chrome-extension://') == -1)
+            if (!ctab.length) {
+              throw new Error(`E212: failed to find the tab with locator '${args.target}'`)
             }
-          }))
-          return activateTab(tab.id) 
-          }else{
-           throw new Error(`E212: failed to find the tab with locator '${args.target}'`)
-            //log.error(e.stack)
-           //throw e
-          }
-          
-      })
-    })
-    //throw new Error(`failed to find the tab with locator '${args.target}'`)
-    
+            log('selectWindow fallback, re-anchoring on', ctab[0])
+            const offset = parseInt(locator, 10);
+            let wt = await checkTaIsPresent(ctab[0].index + offset, ctab[0].windowId);
+            let tab = wt == "" ? ctab[0] : wt;
+            if ((tab.index == 0 && offset == 0) || wt != "") {//when playtab index is 0
+              await updateState(state => ({
+                ...state,
+                tabIds: {
+                  ...state.tabIds,
+                  lastPlay: state.tabIds.toPlay,
+                  toPlay: tab.id,
+                  firstPlay: ctab[0].id
+                }
+              }))
+              return activateTab(tab.id)
+            } else {
+              throw new Error(`E212: failed to find the tab with locator '${args.target}'`)
+            }
+          })
       })
     }
 
@@ -1978,6 +2191,9 @@ const onRequest = async (cmd, args) => {
       })
     }
 
+    // PANEL_ alias: uiv.download arms straight from the side panel — no
+    // content-script hop, and it works before any page is involved
+    case 'PANEL_ON_DOWNLOAD':
     case 'CS_ON_DOWNLOAD': {
       const p = getDownloadMan().prepareDownload(args.fileName, {
         wait:             !!args.wait,
@@ -1985,6 +2201,36 @@ const onRequest = async (cmd, args) => {
         timeoutForStart:  args.timeoutForStart
       })
       return true
+    }
+
+    // saveItem: start a real download of any URL from the background — the
+    // downloads API ignores page CORS/CSP, unlike an in-page <a download>.
+    // PANEL_ alias: uiv.download's plain-URL form, sent from the side panel
+    case 'PANEL_DOWNLOAD_URL':
+    case 'CS_DOWNLOAD_URL': {
+      const label = cmd === 'PANEL_DOWNLOAD_URL' ? 'uiv.download' : 'saveItem'
+      return new Promise((resolve, reject) => {
+        const options = { url: args.url }
+        if (args.filename) options.filename = args.filename
+
+        chrome.downloads.download(options, (downloadId) => {
+          if (chrome.runtime.lastError || downloadId === undefined) {
+            const reason = chrome.runtime.lastError ? chrome.runtime.lastError.message : 'unknown error'
+            // e.g. the derived filename is rejected — retry letting Chrome name it
+            if (args.filename) {
+              return chrome.downloads.download({ url: args.url }, (retryId) => {
+                if (chrome.runtime.lastError || retryId === undefined) {
+                  reject(new Error(`${label}: download failed - ${reason}`))
+                } else {
+                  resolve(true)
+                }
+              })
+            }
+            return reject(new Error(`${label}: download failed - ${reason}`))
+          }
+          resolve(true)
+        })
+      })
     }
 
     case 'CS_INVOKE': {
@@ -2034,8 +2280,13 @@ const onRequest = async (cmd, args) => {
             throw new Error('E212: unknown source not allowed')
         }
 
+        // side panel open (if any) was triggered synchronously in onRequest;
+        // here we only need to know whether it worked
+        const sidePanelOpening = await (args._pSidePanelOpening || Promise.resolve(false))
+
         return withPanelIpc({
-          params: { from }
+          params: { from },
+          panelAlreadyOpening: sidePanelOpening
         })
         .then(panelIpc => {
           // in case of side panel
@@ -2076,7 +2327,11 @@ const onRequest = async (cmd, args) => {
           throw new Error('Error #105: To run macro from public website, enable it in the RPA settings first')
         }
 
-        return withPanelIpc({ params: { from } })
+        return (args._pSidePanelOpening || Promise.resolve(false))
+        .then(sidePanelOpening => withPanelIpc({
+          params: { from },
+          panelAlreadyOpening: sidePanelOpening
+        }))
         .then(panelIpc => {
           return panelIpc.ask('IMPORT_AND_RUN', args)
         })
@@ -2089,12 +2344,8 @@ const onRequest = async (cmd, args) => {
     }
 
     case 'CS_OPEN_PANEL_SETTINGS': {
-      withPanelIpc({
-        params: { settings: true }
-      })
-      .then(ipc => {
-        return ipc.ask('OPEN_SETTINGS')
-      })
+      // settings live on the options page now — open/focus its browser tab
+      openSettings()
       .catch(e => {
         console.error(e)
       })
@@ -2160,7 +2411,17 @@ const initOnInstalled = () => {
           .then(config => {
             return storage.set('config', {
               ...config,
-              showTestCaseTab: false
+              showTestCaseTab: false,
+              // side panel lands on the AI Chat tab on its first open (the
+              // flag is cleared there after use)
+              openAiChatTabOnce: true,
+              // Chrome's own answer to "is this a new user?". restoreConfig
+              // can only ask whether a config exists, which is true for any
+              // reload of an unpacked extension — so it cannot tell a genuine
+              // first install from an update, and the setup dialog was
+              // recommending the upgrade path to brand new users.
+              macroFreshInstall: true,
+              showClassicMacros: false
             })
           })
           
@@ -2171,11 +2432,24 @@ const initOnInstalled = () => {
 
         case 'update': {
           Ext.action.setBadgeText({ text: 'NEW' })
-          Ext.action.setBadgeBackgroundColor({ color: '#4444FF' })       
+          Ext.action.setBadgeBackgroundColor({ color: '#4444FF' })
+          // Say "not a fresh install" OUT LOUD. The install branch above only
+          // ever writes true, so without this the upgrade case is an ABSENT
+          // key, and isFreshInstall has to infer it from showClassicMacros —
+          // a config value nothing else needs any more. One explicit false
+          // here makes the flag authoritative in both directions and leaves
+          // that inference as a genuine last resort (dev builds and Firefox,
+          // where onInstalled does not fire).
+          storage.get('config')
+          .then(config => storage.set('config', {
+            ...config,
+            macroFreshInstall: false
+          }))
+
           return Ext.storage.local.set({
             upgrade_not_viewed: 'not_viewed'
           })
-        }        
+        }
       }
     })
   }

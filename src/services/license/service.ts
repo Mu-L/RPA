@@ -1,4 +1,4 @@
-import { Feature, ILicenseService, LegacyXModuleStatus, LicenseInfo, LicenseType, ValidLicenseInfo } from './types'
+import { Feature, ILicenseService, LegacyXModuleStatus, LicenseInfo, LicenseType } from './types'
 import * as HttpAPI from '@/services/api/http_api'
 import config from '@/config'
 
@@ -64,78 +64,32 @@ export class LicenseService implements ILicenseService {
     })
   }
 
+  // Ui.Vision is totally free since 2026-07: every feature is available to
+  // everyone. The license service remains as the single place feature gates
+  // ask, but it now always answers "allowed" — the license-key UI and the
+  // "get a license" upsell links were removed together with this change.
   canPerform (feature: Feature): boolean {
-    if (this.legacyXModuleStatus !== 'checked_by_remote') {
-      return true
-    }
-
-    const licenseType = (this.license as ValidLicenseInfo).type ?? LicenseType.Personal
-
-    switch (licenseType) {
-      case LicenseType.Enterprise:
-      case LicenseType.Personal:
-      case LicenseType.Pro:
-        return true
-
-      case LicenseType.Player:
-        return feature === Feature.Replay
-    }
+    return true
   }
 
   isProLicense (): boolean {
-    switch (this.legacyXModuleStatus) {
-      case 'pro':
-        return true
-
-      case 'checked_by_remote':
-        return this.license?.status === 'on' &&
-                (this.license.type === LicenseType.Pro || this.license.type === LicenseType.Enterprise)
-
-      default:
-        return false
-    }
+    return true
   }
 
   isPersonalLicense (): boolean {
-    switch (this.legacyXModuleStatus) {
-      case 'free':
-        return true
-
-      case 'checked_by_remote':
-        return this.license?.status === 'on' &&
-                this.license.type === LicenseType.Personal
-
-      default:
-        return false
-    }
+    return false
   }
 
   isPlayerLicense (): boolean {
-    switch (this.legacyXModuleStatus) {
-      case 'checked_by_remote':
-        return this.license?.status === 'on' &&
-                this.license.type === LicenseType.Player
-
-      default:
-        return false
-    }
+    return false
   }
 
   hasNoLicense (): boolean {
-    switch (this.legacyXModuleStatus) {
-      case 'unregistered':
-        return true
-
-      case 'checked_by_remote':
-        return !this.license || this.license.status !== 'on'
-
-      default:
-        return false
-    }
+    return false
   }
 
   isLicenseExpired (): boolean {
-    return this.legacyXModuleStatus === 'checked_by_remote' && this.license?.status === 'off'
+    return false
   }
 
   getEditionName (): string {
@@ -173,74 +127,6 @@ export class LicenseService implements ILicenseService {
       case 'checked_by_remote':
       default:
         return config.xmodulesLimit.unregistered.upgradeUrl
-    }
-  }
-
-  getMaxOcrCalls (): number {
-    if (this.legacyXModuleStatus === 'checked_by_remote' && this.license?.status === 'on') {
-      return this.license.maxOcrCalls
-    }
-
-    switch (this.legacyXModuleStatus) {
-      case 'free':
-        return config.xmodulesLimit.free.ocrCommandCount
-
-      case 'pro':
-        return config.xmodulesLimit.pro.ocrCommandCount
-
-      case 'checked_by_remote':
-      case 'unregistered':
-      default:
-        return config.xmodulesLimit.unregistered.ocrCommandCount
-    }
-  }
-
-  getMaxXCommandCalls (): number {
-    const status = this.convertToLegacyStatus()
-
-    switch (status) {
-
-      case 'free':
-        return config.xmodulesLimit.free.xCommandCount
-
-      case 'pro':
-        return config.xmodulesLimit.pro.xCommandCount
-
-      case 'unregistered':
-      default:
-        return config.xmodulesLimit.unregistered.xCommandCount
-    }
-  }
-
-  getMaxProxyCalls (): number {
-    const status = this.convertToLegacyStatus()
-
-    switch (status) {
-      case 'free':
-        return config.xmodulesLimit.free.proxyExecCount
-
-      case 'pro':
-        return config.xmodulesLimit.pro.proxyExecCount
-
-      case 'unregistered':
-      default:
-        return config.xmodulesLimit.unregistered.proxyExecCount
-    }
-  }
-
-  getMaxXFileMacros (): number {
-    const status = this.convertToLegacyStatus()
-
-    switch (status) {
-      case 'free':
-        return config.xmodulesLimit.free.xFileMacroCount
-
-      case 'pro':
-        return config.xmodulesLimit.pro.xFileMacroCount
-
-      case 'unregistered':
-      default:
-        return config.xmodulesLimit.unregistered.xFileMacroCount
     }
   }
 

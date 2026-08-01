@@ -5,9 +5,50 @@ import { sanitizeFileName, dataURItoArrayBuffer, arrayBufferToString } from '@/c
 import { IWithLinkStorage, ReadFileType, readableSize } from '../flat/storage'
 import { getNativeFileSystemAPI, NativeFileAPI, FileSystemEntryWithInfo, InvocationResult } from '@/services/filesystem'
 import { KantuFileAccess } from '@/services/filesystem/kantu-file-access'
-import { ErrorWithCode, getErrorMessageForCode } from '../flat/native_filesystem_storage'
 import { singletonGetterByKey } from '@/common/ts_utils'
 import log from '@/common/log'
+
+export class ErrorWithCode extends Error {
+  public code: number;
+
+  constructor(message: string, code: number) {
+    super(message);
+    this.name = 'ErrorWithCode'
+    this.code = code
+
+    // Note: better to keep stack trace
+    // reference: https://stackoverflow.com/a/32749533/1755633
+    let captured = true
+
+    if (typeof Error.captureStackTrace === 'function') {
+      try {
+        Error.captureStackTrace(this, this.constructor)
+      } catch (e) {
+        captured = false
+      }
+    }
+
+    if (!captured) {
+      this.stack = (new Error(message)).stack
+    }
+  }
+}
+
+export function getErrorMessageForCode (code: KantuFileAccess.ErrorCode) {
+  switch (code) {
+    case KantuFileAccess.ErrorCode.Succeeded:
+      return 'Success'
+
+    case KantuFileAccess.ErrorCode.Failed:
+      return 'Failed to load'
+
+    case KantuFileAccess.ErrorCode.Truncated:
+      return 'File too large to load'
+
+    default:
+      return `Unknown error code: ${code}`
+  }
+}
 
 export type NativeFileSystemStandardStorageOptions = StandardStorageOptions & {
   rootDir:       string;
@@ -160,7 +201,12 @@ export class NativeFileSystemStandardStorage extends StandardStorage implements 
         }
 
         const convertName = (entryName: string, isDirectory: boolean) => {
-          return this.shouldKeepExt || isDirectory ? entryName : this.removeExt(entryName)
+          if (this.shouldKeepExt || isDirectory) return entryName
+          // only the PRIMARY extension is an implementation detail to hide
+          // ("Foo.json" -> "Foo", legacy "Foo.js.json" -> "Foo.js");
+          // secondary extensions are part of the name ("Foo.js" stays)
+          const ext = path.extname(entryName).substr(1).toLowerCase()
+          return ext === this.extensions[0].toLowerCase() ? this.removeExt(entryName) : entryName
         }
         const convert = (entry: FileSystemEntryWithInfo): Entry => {
           const dir          = this.dirPath(directoryPath)
@@ -228,7 +274,7 @@ export class NativeFileSystemStandardStorage extends StandardStorage implements 
     .then(() => {
       return this.fs.moveFile({
         sourcePath: this.filePath(filePath),
-        targetPath: this.filePath(newPath, true)
+        targetPath: this.filePath(this.inheritSecondaryExt(filePath, newPath), true)
       })
       .then(() => {})
     })
@@ -239,10 +285,27 @@ export class NativeFileSystemStandardStorage extends StandardStorage implements 
     .then(() => {
       return this.fs.copyFile({
         sourcePath: this.filePath(filePath),
-        targetPath: this.filePath(newPath, true)
+        targetPath: this.filePath(this.inheritSecondaryExt(filePath, newPath), true)
       })
       .then(() => {})
     })
+  }
+
+  // rename/copy must not silently change a file's TYPE: a script macro
+  // (secondary extension, e.g. .js) renamed to a bare name stays .js instead
+  // of getting the primary extension appended — which would leave raw script
+  // text in a file the decoder parses as JSON. An explicit known extension
+  // in the new name always wins.
+  private inheritSecondaryExt (sourcePath: string, newPath: string): string {
+    const extOf = (p: string) => path.extname(path.basename(p)).substr(1).toLowerCase()
+    const isKnown = (e: string) => this.extensions.some(x => x.toLowerCase() === e)
+
+    if (isKnown(extOf(newPath))) return newPath
+
+    const srcExt = extOf(this.filePath(sourcePath))
+    const isSecondary = srcExt !== this.extensions[0].toLowerCase() && isKnown(srcExt)
+
+    return isSecondary ? `${newPath}.${srcExt}` : newPath
   }
 
   protected __createDirectory (directoryPath: string): Promise<void> {
@@ -277,8 +340,11 @@ export class NativeFileSystemStandardStorage extends StandardStorage implements 
     const baseName      = path.basename(filePath)
     const sanitized     = shouldSanitize ? sanitizeFileName(baseName) : baseName
     const existingExt   = path.extname(baseName)
-    const ext           = this.extensions[0]
-    const finalFileName = existingExt && existingExt.substr(1).toLowerCase() === ext.toLowerCase() ? sanitized: (sanitized + '.' + ext)
+    // ANY known extension is honored as-is; only extension-less names get the
+    // primary one appended. This is what lets a macro named "Foo.js" live as
+    // the plain file Foo.js while "Bar" still becomes Bar.json.
+    const isKnownExt    = !!existingExt && this.extensions.some(e => e.toLowerCase() === existingExt.substr(1).toLowerCase())
+    const finalFileName = isKnownExt ? sanitized : (sanitized + '.' + this.extensions[0])
 
     if (this.isStartWithBaseDir(dirName)) {
       return path.normalize(path.join(dirName, finalFileName))

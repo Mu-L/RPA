@@ -1,0 +1,219 @@
+// JS script editor (script_view.js) — used by BOTH the side panel Macro tab
+// and the IDE window (dashboard editor), so the styles live with the
+// component instead of in macro.scss. CodeMirror fills the space, the
+// toolbar is docked at the BOTTOM (same position as the table's command
+// editor bar); active/error line backgrounds mirror the command table's row
+// highlighting.
+
+.sidepanel-script-view {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+
+  .react-codemirror2 {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    height: auto;
+
+    .CodeMirror {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: auto;
+      font-size: 13px;
+    }
+  }
+
+  .script-toolbar {
+    flex: none;
+    border-top: 1px solid #d9d9d9;
+    background: #fafafa;
+
+    // shown while the macro has unsaved edits (same look as the table's
+    // command editor unsaved bar)
+    .script-unsaved-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      padding: 4px 8px;
+      border-bottom: 1px solid #ffe58f;
+      background: #fffbe6;
+
+      .unsaved-note {
+        font-size: 12px;
+        color: #ad6800;
+        white-space: nowrap;
+      }
+
+      .unsaved-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+    }
+
+    // dev-mode drawer holding the script helpers (Find/Select/image) —
+    // collapsed header row like the command editor / Logs & Variables
+    .script-tools-drawer {
+      border-bottom: 1px solid #ececec;
+
+      .script-tools-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 2px 8px;
+        cursor: pointer;
+        user-select: none;
+
+        .script-tools-title {
+          font-size: 12px;
+          font-weight: bold;
+          color: #666;
+          white-space: nowrap;
+        }
+      }
+
+      .script-tools-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 8px 6px;
+      }
+
+      // Thumbnail of the vision image named on the cursor's line. It has to
+      // announce itself as a PICTURE: the images people match on are pictures
+      // of buttons, so a bare thumbnail in a toolbar is read as a button and
+      // the preview goes unnoticed. The file-name label and the dashed,
+      // inset frame are what separate "this is an image of the target" from
+      // "this is a control you can click". Clicking it jumps to the image's
+      // Visual-tab listing (see jumpToVisualTab).
+      .script-image-preview {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin-left: auto;
+        min-width: 0;
+        padding: 2px 4px 2px 6px;
+        border-left: 1px solid #e3e8ef;
+        cursor: pointer;
+
+        &:hover img {
+          border-color: #1a6ce0;
+        }
+
+        .script-image-preview-label {
+          font-size: 10px;
+          line-height: 1.2;
+          color: #6b7280;
+          max-width: 96px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          direction: rtl; // keep the END of the name (…_dpi_96.png) visible
+          text-align: right;
+        }
+
+        img {
+          max-height: 40px;
+          max-width: 120px;
+          padding: 2px;
+          border: 1px dashed #b8c4d4;
+          border-radius: 3px;
+          background: #f7f9fc;
+          // clicks fall through to the wrapping span's onClick
+          pointer-events: none;
+        }
+      }
+    }
+
+    .script-status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 8px;
+    }
+
+    .script-hint {
+      font-size: 11px;
+      color: #888;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  // breakpoint gutter (dev tooling): click to toggle the red dot; the run
+  // pauses when it reaches a marked line
+  .CodeMirror-gutters .breakpoints,
+  .breakpoints {
+    width: 12px;
+  }
+
+  .script-breakpoint-dot {
+    width: 9px;
+    height: 9px;
+    margin: 4px 0 0 1px;
+    border-radius: 50%;
+    background: #e5484d;
+  }
+
+  .script-active-line {
+    background: rgba(24, 144, 255, 0.22) !important;
+  }
+
+  .script-error-line {
+    background: rgba(255, 77, 79, 0.28) !important;
+  }
+
+  // line being probed by the Find button — yellow ("working here"), NOT
+  // red: red reads as an error while the probe is still running
+  .script-find-line {
+    background: rgba(250, 199, 117, 0.4) !important;
+  }
+
+  // uiv.* API calls (overlay mode): known calls in brand blue, unknown
+  // names marked as probable typos
+  .cm-uiv-call {
+    color: #1a6ce0;
+    font-weight: 600;
+  }
+
+  .cm-uiv-unknown {
+    color: #cf1322;
+    text-decoration: underline dotted;
+  }
+}
+
+html[data-theme='dark'] .sidepanel-script-view {
+  .script-toolbar {
+    background: #2a2a2a;
+    border-top-color: #3a3a3a;
+
+    .script-unsaved-bar {
+      background: #4a4020;
+      border-bottom-color: #6b5b1e;
+
+      .unsaved-note {
+        color: #e8c06a;
+      }
+    }
+
+    .script-tools-drawer {
+      border-bottom-color: #3a3a3a;
+
+      .script-tools-title {
+        color: #9aa4b2;
+      }
+    }
+
+    .script-hint {
+      color: #9aa4b2;
+    }
+  }
+}

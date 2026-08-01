@@ -45,7 +45,7 @@ export function runDownloadLog (base64result:any,targetP:any,osType:any): Promis
   const fsAPI = getNativeFileSystemAPI()
   return fsAPI.getSpecialFolderPath({ folder: SpecialFolder.UserProfile })
   .then(profilePath => {
-    const uivision = osType == "mac"?'/Library/uivision-xmodules/2.2.2/xmodules/': path.join(profilePath, '\\AppData\\Roaming\\UI.Vision\\XModules\\ocr');
+    const uivision = osType == "mac"?'/Library/uivision-xmodules/2.2.2/xmodules/': path.join(profilePath, '\\AppData\\Roaming\\Ui.Vision\\XModules\\ocr');
     return fsAPI.ensureDir({ path: uivision })
     .then(Opath => {
      const { rootDir } = getXFile().getCachedConfig();
@@ -108,7 +108,7 @@ export function runOCRLocal (options: RunOCROptions): Promise<any> {
   const fsAPI = getNativeFileSystemAPI()
   return fsAPI.getSpecialFolderPath({ folder: SpecialFolder.UserProfile })
   .then(profilePath => {
-    const uivision = osType == "mac"?'/Library/uivision-xmodules/2.2.2/xmodules/': path.join(profilePath, '\\AppData\\Roaming\\UI.Vision\\XModules\\ocr');
+    const uivision = osType == "mac"?'/Library/uivision-xmodules/2.2.2/xmodules/': path.join(profilePath, '\\AppData\\Roaming\\Ui.Vision\\XModules\\ocr');
     
     return fsAPI.ensureDir({ path: uivision })
     .then(Opath => {

@@ -167,6 +167,13 @@ const factory = (store) => {
         if (!hasUnsaved)  return Promise.resolve(true)
         return tryToSave(store, defaultName)
       })
+    },
+    // unconditional save: existing macro saves in place, an Untitled one opens
+    // the "Save macro as.." dialog. Needed for Untitled content, which
+    // hasUnsavedMacro never reports as unsaved (src == null), so save() above
+    // would silently do nothing there.
+    saveAs: (defaultName) => {
+      return withIsSaving(() => tryToSave(store, defaultName))
     }
   }
 }

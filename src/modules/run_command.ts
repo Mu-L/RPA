@@ -67,10 +67,13 @@ import { MacroInspector } from '@/services/player/monitor/types'
 import { parseProxyUrl, setProxy } from '@/services/proxy'
 import { ProxyScheme } from '@/services/proxy/types'
 import { getStorageManager } from '@/services/storage'
+import { visionLocate, visionPrompt } from '@/services/ai/vision_prompt/service'
+import { getAIProviderConfig, normalizeApiKey } from '@/services/ai/computer_use/service'
 import { getXUserIO } from '@/services/xmodules/x_user_io'
 import { getXFile } from '@/services/xmodules/xfile'
 import { getXLocal } from '@/services/xmodules/xlocal'
 import { getNativeXYAPI, MouseButton, MouseEventType } from '@/services/xy'
+import { sendCdpMouseEvent, sendCdpTypeText } from '@/services/cdp_input'
 import { InterpreterInstance, PlayerInstance } from '@/init_player'
 import { getOcrResponse, guardOcrSettings } from '@/modules/ocr'
 import { store } from '@/redux'
@@ -86,7 +89,10 @@ import {
 import { ComputerUseService } from '@/services/ai/computer_use/service'
 
 const captureScreenshotService = new CaptureScreenshotService({
-  captureVisibleTab: (windowId, options) => csIpc.ask('PANEL_CAPTURE_VISIBLE_TAB', { windowId, options })
+  captureVisibleTab: (windowId, options) => csIpc.ask('PANEL_CAPTURE_VISIBLE_TAB', { windowId, options }),
+  onThrottleWait: (waitMs: number) => {
+    store.dispatch(act.addLog('warning', `W370: Screenshot rate limit reached — waited ${waitMs}ms for the next screenshot slot (Chrome allows ~2 captures/sec). Visual/OCR steps in tight loops are slowed down by this; consider adding a pause between them.`))
+  }
 })
 
 export const askBackgroundToRunCommand = async ({
@@ -251,6 +257,35 @@ export const askBackgroundToRunCommand = async ({
   })
 }
 
+// aiPrompt and aiScreenXY run on WHATEVER PROVIDER is configured:
+//   anthropic          -> AnthropicService (unchanged; what the demos were
+//                         tuned against, and the only path with the
+//                         computer-use tool)
+//   everything else    -> vision_prompt/service.ts, an OpenAI-compatible
+//                         request that covers the free Ui.Vision tier,
+//                         OpenRouter and a local model
+//
+// They used to construct AnthropicService directly, so every non-Anthropic
+// user got "No Anthropic API key" for a job any vision-capable model can do.
+const useAnthropicVision = (): string | null => {
+  const config = store.getState().config
+  const provider = config.aiProvider || 'uivision'
+  const apiKey = normalizeApiKey(config.anthropicAPIKey || '')
+
+  // an explicit Anthropic setup, or a stored key with no provider chosen yet
+  if (provider === 'anthropic') {
+    if (!apiKey) {
+      throw new Error(
+        'E351: The AI provider is set to Anthropic but no Anthropic API key is entered. ' +
+        'Add the key in Settings > AI, or pick a different provider there.'
+      )
+    }
+    return apiKey
+  }
+
+  return null
+}
+
 const runXMouseKeyboardCommand = (command: any) => {
   const { cmd, target, value, extra } = command
   console.log('#220 runXMouseKeyboardCommand command:>> ', command)
@@ -278,6 +313,29 @@ const runXMouseKeyboardCommand = (command: any) => {
             .sendText({ text })
             .then((success) => {
               if (!success) throw new Error(`E311: Failed to XType '${target}'`)
+              return { byPass: true }
+            })
+        })
+    }
+
+    case 'BType': {
+      // INTERNAL — not a table command: this is the engine behind
+      // uiv.browser.type in JS scripts (script_runner's bType bridge op).
+      // XType via chrome.debugger (CDP) — no XModule needed. Types into the
+      // play tab's focused element.
+      // Browser content only: cannot type into OS dialogs or other apps.
+      if (isDesktopMode) {
+        throw new Error('E333: BType works inside the browser only. Use XType (XModule) for desktop automation')
+      }
+
+      return Promise.resolve()
+        .then(() => delay(() => {}, 300))
+        .then(() => decryptIfNeeded(target))
+        .then((text) => {
+          return getState()
+            .then((state: any) => sendCdpTypeText(state.tabIds.toPlay, text))
+            .then((success) => {
+              if (!success) throw new Error(`E339: Failed to BType '${target}'`)
               return { byPass: true }
             })
         })
@@ -318,11 +376,47 @@ const runXMouseKeyboardCommand = (command: any) => {
     case 'XClickRelative':
     case 'XClickTextRelative':
     case 'XClickText':
+    case 'BMove':
+    case 'BMoveText':
+    case 'BMoveTextRelative':
+    case 'BMoveRelative':
+    case 'BClickText':
+    case 'BClickTextRelative':
+    case 'BClickRelative':
+    case 'BClick':
     case 'XClick': {
+      // B commands (BClick/BMove/BClickText/...) are INTERNAL, not table
+      // commands: they are the engine behind uiv.browser.click/move/down/up
+      // in JS scripts (script_runner's bClick/bMove/bDown/bUp bridge ops).
+      // Same target resolution as their X counterparts, but the final mouse
+      // event goes to the play tab via chrome.debugger (CDP) instead of the
+      // XModule native host. Browser content only — no OS/desktop events.
+      const isCdpDispatch = /^B(Click|Move)(Text)?(Relative)?$/.test(cmd)
+
+      // OCR engine 99 ("Local") runs inside the FileAccess XModule. B commands
+      // need no XModule for input dispatch, but when the XModule is installed
+      // the Local engine works for them too — so only block engine 99 when the
+      // install probe (below, before parseTarget runs) found it missing.
+      const isCdpLocalOcrEngine = () => {
+        if (!isCdpDispatch) return false
+        const engine = vars.get('!ocrEngine') != null ? vars.get('!ocrEngine') : store.getState().config.ocrEngine
+        return engine == 99
+      }
+      let cdpLocalOcrAvailable = false
+      const guardCdpOcrEngine = () => {
+        if (isCdpLocalOcrEngine() && !cdpLocalOcrAvailable) {
+          throw new Error(`E338: ${cmd} needs the XModule for the Local OCR engine, but it is not installed. Install the XModule, or use the Javascript or Cloud OCR engine`)
+        }
+      }
+
+      if (isCdpDispatch && isDesktopMode) {
+        throw new Error(`E333: ${cmd} works inside the browser only. Use XClick/XMove (XModule) for desktop automation`)
+      }
+
       const parseTarget = (target = '', cmd: any) => {
         let trimmedTarget = target.trim()
 
-        const relativeCommands = ['XMoveTextRelative', 'XClickTextRelative']
+        const relativeCommands = ['XMoveTextRelative', 'XClickTextRelative', 'BMoveTextRelative', 'BClickTextRelative']
         const regexForTarget = /^.*#R.*,.*$/
         if (relativeCommands.includes(cmd) && !regexForTarget.test(trimmedTarget)) {
           throw new Error(`Error E310: Relative coordinates missing. Format should be: word#R(X),(Y)`)
@@ -336,6 +430,7 @@ const runXMouseKeyboardCommand = (command: any) => {
 
         if (/^ocr=/i.test(trimmedTarget)) {
           guardOcrSettings({ store })
+          guardCdpOcrEngine()
 
           return {
             type: 'ocr',
@@ -343,15 +438,16 @@ const runXMouseKeyboardCommand = (command: any) => {
           }
         }
 
-        if (cmd === 'XMoveText') {
+        if (cmd === 'XMoveText' || cmd === 'BMoveText') {
           guardOcrSettings({ store })
+          guardCdpOcrEngine()
 
           return {
             type: 'ocrTextXmove',
             value: { query: trimmedTarget }
           }
         }
-        if (cmd === 'XMoveTextRelative') {
+        if (cmd === 'XMoveTextRelative' || cmd === 'BMoveTextRelative') {
           //  setIn(['caliber_trget'], trimmedTarget)
           updateState(setIn(['caliber_trget'], trimmedTarget))
           updateState(setIn(['curent_cmd'], cmd))
@@ -359,22 +455,24 @@ const runXMouseKeyboardCommand = (command: any) => {
           localStorage.setItem('caliber_trget', trimmedTarget)
           localStorage.setItem('isDesktopMode', JSON.stringify(isDesktopMode))
           guardOcrSettings({ store })
+          guardCdpOcrEngine()
           return {
             type: 'ocrTextXmoveRelative',
             value: { query: trimmedTarget }
           }
         }
 
-        if (cmd === 'XClickText' && !/^text=/i.test(trimmedTarget)) {
+        if ((cmd === 'XClickText' || cmd === 'BClickText') && !/^text=/i.test(trimmedTarget)) {
           guardOcrSettings({ store })
-          3
+          guardCdpOcrEngine()
+
           return {
             type: 'ocrText',
             value: { query: trimmedTarget }
           }
         }
 
-        if (cmd === 'XClickTextRelative' && /#R/i.test(trimmedTarget)) {
+        if ((cmd === 'XClickTextRelative' || cmd === 'BClickTextRelative') && /#R/i.test(trimmedTarget)) {
           if (checkIfNumberFound(trimmedTarget)) {
             throw new Error('Wrong input ' + trimmedTarget)
           }
@@ -384,6 +482,7 @@ const runXMouseKeyboardCommand = (command: any) => {
           localStorage.setItem('caliber_trget', trimmedTarget)
           localStorage.setItem('isDesktopMode', JSON.stringify(isDesktopMode))
           guardOcrSettings({ store })
+          guardCdpOcrEngine()
           return {
             type: 'ocrText',
             value: { query: trimmedTarget.split('#R')[0] }
@@ -478,31 +577,60 @@ const runXMouseKeyboardCommand = (command: any) => {
         XClickRelative: parseValueForXClick,
         XClickTextRelative: parseValueForXClick,
         OCRExtractbyTextRelative: parseValueForXClick,
+        BClick: parseValueForXClick,
+        BClickText: parseValueForXClick,
+        BClickTextRelative: parseValueForXClick,
+        BClickRelative: parseValueForXClick,
         XMove: parseValueForXMove,
         XMoveText: parseValueForXMove,
         XMoveTextRelative: parseValueForXMove,
-        XMoveRelative: parseValueForXMove
+        XMoveRelative: parseValueForXMove,
+        BMove: parseValueForXMove,
+        BMoveText: parseValueForXMove,
+        BMoveTextRelative: parseValueForXMove,
+        BMoveRelative: parseValueForXMove
       }[cmd]
 
-      let isRelative = /relative/i.test(cmd) && !/XClickText/i.test(cmd)
+      // Note: /ClickText/ (not /XClickText/) so B variants are excluded too
+      let isRelative = /relative/i.test(cmd) && !/ClickText/i.test(cmd)
       if (
         (/relative/i.test(cmd) && cmd === 'OCRExtractbyTextRelative') ||
         (/relative/i.test(cmd) && cmd === 'XMoveTextRelative') ||
+        (/relative/i.test(cmd) && cmd === 'BMoveTextRelative') ||
         (/relative/i.test(cmd) && cmd === 'visionLimitSearchAreabyTextRelative')
       ) {
         isRelative = false
       }
 
-      return getXUserIO()
-        .sanityCheck()
-        .then(() => {
-          if (xCmdCounter.get() === 1) {
-            return hideDownloadBar()
-          }
-        })
+      // CDP dispatch needs no XModule for input, so skip its install/sanity
+      // check. Exception: with OCR engine 99 (Local) selected, probe whether
+      // the XModule is installed (cheap native-messaging ping, same approach
+      // as the AI macro agent) so guardCdpOcrEngine can allow or reject it.
+      const pXUserIOReady = isCdpDispatch
+        ? (isCdpLocalOcrEngine()
+            ? Promise.race([
+                getXFile().getVersion(),
+                delay(() => null, 3000)
+              ]).then((info: any) => {
+                cdpLocalOcrAvailable = !!(info && info.installed)
+              }).catch(() => { /* leave cdpLocalOcrAvailable = false */ })
+            : Promise.resolve())
+        : getXUserIO()
+            .sanityCheck()
+            .then(() => {
+              if (xCmdCounter.get() === 1) {
+                return hideDownloadBar()
+              }
+            })
+
+      return pXUserIOReady
         .then(() => {
           const realTarget = parseTarget(target, cmd)
           const realValue = parseValue(value)
+
+          if (isCdpDispatch && realTarget.type === 'desktop_coordinates') {
+            throw new Error(`E334: ${cmd} does not support desktop coordinates (D x,y). Use viewport coordinates or XClick/XMove`)
+          }
 
           const pNativeXYParams = (() => {
             if (isRelative && realTarget.type !== 'visual_search') {
@@ -548,7 +676,11 @@ const runXMouseKeyboardCommand = (command: any) => {
                   })
                   .then(getSidePanelWidth)
                   .then(([sidePanelWidth, result]) => {
-                    result.offset.x = result.offset.x + sidePanelWidth
+                    // CDP dispatch uses pure page-viewport coordinates; the side
+                    // panel correction only applies to the XModule screen mapping
+                    if (!isCdpDispatch) {
+                      result.offset.x = result.offset.x + sidePanelWidth
+                    }
                     return result
                   })
               }
@@ -591,7 +723,8 @@ const runXMouseKeyboardCommand = (command: any) => {
                   .then(([sidePanelWidth, prev]) => {
                     // we need this for visual_search
                     // eg. DemoXMove
-                    if (prev.type === 'viewport') {
+                    // (XModule screen mapping only — CDP uses pure viewport coords)
+                    if (prev.type === 'viewport' && !isCdpDispatch) {
                       prev.offset.x = prev.offset.x + sidePanelWidth
                     }
                     return prev
@@ -935,7 +1068,8 @@ const runXMouseKeyboardCommand = (command: any) => {
                   .then(getSidePanelWidth)
                   .then(([sidePanelWidth, prev]) => {
                     // we need this for ocrText
-                    if (prev.type === 'viewport') {
+                    // (XModule screen mapping only — CDP uses pure viewport coords)
+                    if (prev.type === 'viewport' && !isCdpDispatch) {
                       prev.offset.x = prev.offset.x + sidePanelWidth
                     }
                     return prev
@@ -1023,7 +1157,11 @@ const runXMouseKeyboardCommand = (command: any) => {
                 })
                   .then(getSidePanelWidth)
                   .then(([sidePanelWidth, result]) => {
-                    result.offset.x = result.offset.x + sidePanelWidth
+                    // CDP dispatch uses pure page-viewport coordinates; the side
+                    // panel correction only applies to the XModule screen mapping
+                    if (!isCdpDispatch) {
+                      result.offset.x = result.offset.x + sidePanelWidth
+                    }
                     return result
                   })
               }
@@ -1032,15 +1170,22 @@ const runXMouseKeyboardCommand = (command: any) => {
 
           return pNativeXYParams.then(({ type, offset, originalResult = {} }) => {
             console.log('pNativeXYParams:>> isDesktopMode:', isDesktopMode)
-            // Note: should not bring play tab to front if it's in desktop mode
-            const prepare = isDesktopMode //isCVTypeForDesktop(vars.get('!CVSCOPE'))
+            // Note: should not bring play tab to front if it's in desktop mode.
+            // CDP dispatch targets the play tab directly, so the browser window
+            // can stay in the background (no need to bring it to front either).
+            const prepare = isDesktopMode || isCdpDispatch
               ? Promise.resolve()
               : runCsFreeCommands({ cmd: 'bringBrowserToForeground' })
 
             return prepare
-              .then(() => delay(() => {}, 300))
+              // The 300ms settle delay exists for the XModule path only (lets
+              // the browser window reach the foreground before an OS-level
+              // click). CDP input needs no window focus, so skip it.
+              .then(() => delay(() => {}, isCdpDispatch ? 0 : 300))
               .then(() => {
-                const api = getNativeXYAPI()
+                // Do not touch the XModule native host for CDP dispatch —
+                // getNativeXYAPI() would try to connect to it on first call
+                const api = isCdpDispatch ? null : getNativeXYAPI()
                 const [button, eventType] = (() => {
                   switch (realValue) {
                     case '#left':
@@ -1076,7 +1221,7 @@ const runXMouseKeyboardCommand = (command: any) => {
                 }
 
                 // check command is TextRelative and calculate by caliber
-                if (command.cmd == 'XClickTextRelative') {
+                if (['XClickTextRelative', 'BClickTextRelative'].includes(command.cmd)) {
                   let getTickCounter = (str) => {
                     function getNumberSet(num, type) {
                       if (parseInt(num) > 0 && type == 'X') {
@@ -1140,7 +1285,7 @@ const runXMouseKeyboardCommand = (command: any) => {
                   }
                 }
 
-                if (['XClickTextRelative', 'XMoveTextRelative'].includes(command.cmd)) {
+                if (['XClickTextRelative', 'XMoveTextRelative', 'BClickTextRelative', 'BMoveTextRelative'].includes(command.cmd)) {
                   if (!originalResult || !originalResult.vars) {
                     originalResult = {
                       vars: {}
@@ -1151,14 +1296,37 @@ const runXMouseKeyboardCommand = (command: any) => {
                 }
 
                 log('event ===', event)
-                const pSendMouseEvent =
-                  type === 'desktop'
+                const pSendMouseEvent = (() => {
+                  if (isCdpDispatch) {
+                    if (type === 'desktop') {
+                      throw new Error(`E335: ${cmd} works inside the browser only. Use XClick/XMove (XModule) for desktop targets`)
+                    }
+                    // Show the big animated cursor overlay in the play tab —
+                    // CDP input never moves the real mouse, so this is the only
+                    // visual feedback. For clicks the content script resolves
+                    // after the short cursor glide, so the real click lands once
+                    // the cursor has visually arrived. Pages without a content
+                    // script (or a timed-out ipc) just skip the visual.
+                    const pShowCursor = csIpc
+                      .ask('PANEL_SHOW_BROWSER_CURSOR', {
+                        x: event.x,
+                        y: event.y,
+                        isClick: event.type !== MouseEventType.Move
+                      })
+                      .catch(() => {})
+                    return pShowCursor
+                      .then(() => getState())
+                      .then((state: any) => sendCdpMouseEvent(state.tabIds.toPlay, event))
+                  }
+
+                  return type === 'desktop'
                     ? api.sendMouseEvent(event)
                     : api.sendViewportMouseEvent(event, {
                         getViewportRectInScreen: () => {
                           return csIpc.ask('PANEL_GET_VIEWPORT_RECT_IN_SCREEN')
                         }
                       })
+                })()
 
                 store.dispatch(Actions.setOcrInDesktopMode(false))
 
@@ -1819,7 +1987,9 @@ const runCommand = (command: any, index?: any, parentCommand?: any) => {
         const runWithRetry = retry(run, {
           timeout,
           shouldRetry: (e) => {
-            return store.getState().status === C.APP_STATUS.PLAYER && /OCR.*\ not found/.test(e.message)
+            // retry #102 like "not found" — see the vision retry below
+            return store.getState().status === C.APP_STATUS.PLAYER &&
+              (/OCR.*\ not found/.test(e.message) || /Error #102/.test(e.message))
           },
           retryInterval: (retryCount, lastRetryInterval) => {
             return 0.5 + 0.25 * retryCount
@@ -1868,19 +2038,22 @@ const runCommand = (command: any, index?: any, parentCommand?: any) => {
         throw new Error('target is required')
       }
 
+      const aiPromptAnthropicKey = useAnthropicVision()
+
       return aiPromptGetPromptAndImageArrayBuffers(target)
         .then(({ prompt, mainImageBuffer, searchImageBuffer }) => {
-          let anthropicAPIKey = store.getState().config.anthropicAPIKey
-
-          const anthropicService = new AnthropicService(anthropicAPIKey)
           const promptText = prompt
 
-          store.dispatch(act.addLog('info', 'Calling Anthropic API'))
+          store.dispatch(act.addLog('info', 'Calling the AI'))
           const start = Date.now()
 
-          // return anthropicService?.readTextInImage(imageBuffer).then((response) => {
-          return anthropicService
-            ?.aiPromptProcessImage(mainImageBuffer, searchImageBuffer, promptText)
+          // Anthropic keeps its own path (unchanged behaviour); every other
+          // provider goes through the OpenAI-compatible one
+          const pResult = aiPromptAnthropicKey
+            ? new AnthropicService(aiPromptAnthropicKey).aiPromptProcessImage(mainImageBuffer, searchImageBuffer, promptText)
+            : visionPrompt(mainImageBuffer, searchImageBuffer, promptText)
+
+          return pResult
             .then(({ coords, isSinglePoint, aiResponse }) => {
               const end = Date.now()
               const time = (end - start) / 1000
@@ -1974,19 +2147,38 @@ const runCommand = (command: any, index?: any, parentCommand?: any) => {
               : ensureExtName('.png', C.LAST_SCREENSHOT_FILE_NAME)
 
             return getFileBufferFromScreenshotStorage(screenshotFileName)
-              .then((imageBuffer) => {
-                let anthropicAPIKey = store.getState().config.anthropicAPIKey
-
-                const anthropicService = new AnthropicService(anthropicAPIKey)
+              .then(async (imageBuffer) => {
+                const screenXYAnthropicKey = useAnthropicVision()
                 const promptText = target
 
-                store.dispatch(act.addLog('info', 'Calling Anthropic API'))
+                store.dispatch(act.addLog('info', 'Calling the AI'))
                 const start = Date.now()
 
                 // TODO: refactoring code required in regard to scaleFactor / macScaleFactor / window.devicePixelRatio
-                return anthropicService
-                  ?.aiScreenXYProcessImage(imageBuffer, promptText)
-                  .then(({ coords, aiResponse }) => {
+                // Pointing at a screen coordinate is the hardest thing asked
+                // of a vision model, and only the Anthropic path uses the
+                // computer-use tool that is trained for it. Everything else
+                // asks a general vision model and takes the numbers on trust,
+                // which measured well on synthetic images and noticeably worse
+                // on a real page. Say so rather than let it look broken.
+                if (!screenXYAnthropicKey) {
+                  const providerLabel = getAIProviderConfig().label
+                  store.dispatch(act.addLog(
+                    'warning',
+                    `aiScreenXY on ${providerLabel}: so far this command has only been tested with Anthropic, ` +
+                    `whose path uses the computer-use tool built for pointing at screen coordinates. ` +
+                    `Other models estimate the position and can be off by several percent — enough to miss ` +
+                    `anything small. If it misses, a real finder is exact: uiv.$ for DOM elements, ` +
+                    `uiv.findImage for pictures, uiv.ocr.findText for rendered text.`
+                  ))
+                }
+
+                const pLocate = screenXYAnthropicKey
+                  ? new AnthropicService(screenXYAnthropicKey).aiScreenXYProcessImage(imageBuffer, promptText)
+                  : visionLocate(imageBuffer, promptText)
+
+                return pLocate
+                  .then(async ({ coords, aiResponse }) => {
                     const end = Date.now()
                     const time = (end - start) / 1000
                     const timeStr = time.toFixed(2)
@@ -1994,6 +2186,23 @@ const runCommand = (command: any, index?: any, parentCommand?: any) => {
 
                     const ai1 = coords[0].x || 0
                     const ai2 = coords[0].y || 0
+
+                    // !ai1/!ai2 are used as PAGE-VIEWPORT coordinates by the
+                    // click that follows, so they are only right if the
+                    // captured image shares that coordinate space. Report the
+                    // image size; the page's own viewport has to come from the
+                    // PAGE (uiv.eval('return innerWidth')) — window here is the
+                    // side panel's window, and comparing against it produced a
+                    // confident, meaningless "MISMATCH".
+                    try {
+                      const { Jimp } = await import('jimp')
+                      const shot = await Jimp.read(imageBuffer as any)
+                      store.dispatch(act.addLog(
+                        'info',
+                        `aiScreenXY frame: screenshot ${shot.bitmap.width}x${shot.bitmap.height} px, dpr ${window.devicePixelRatio}. ` +
+                        `Coordinates are in THIS space — compare with the page's own innerWidth/innerHeight.`
+                      ))
+                    } catch (e) { /* diagnostic only */ }
 
                     let newVars = (() => {
                       vars.set(
@@ -2585,7 +2794,14 @@ const runCommand = (command: any, index?: any, parentCommand?: any) => {
       }
 
       const run = () => {
-        const prepare = isCVTypeForDesktop(cvScope) ? Promise.resolve() : csIpc.ask('PANEL_CLEAR_VISION_RECTS_ON_PLAYING_PAGE')
+        // Clearing leftover highlight rects is cosmetic — right after a click
+        // navigated to a heavy SPA the content script is still booting, the
+        // 4s CS_IPC_TIMEOUT fires and this ask dies with Error #102. A failed
+        // cleanup must not kill the vision search (a fresh page has no rects
+        // to clear anyway).
+        const prepare = isCVTypeForDesktop(cvScope)
+          ? Promise.resolve()
+          : csIpc.ask('PANEL_CLEAR_VISION_RECTS_ON_PLAYING_PAGE').catch(() => undefined)
 
         return prepare
           .then(saveImageFirstIfNeeded)
@@ -2728,7 +2944,13 @@ const runCommand = (command: any, index?: any, parentCommand?: any) => {
       const runWithRetry = retry(run, {
         timeout,
         shouldRetry: (e) => {
-          return store.getState().status === C.APP_STATUS.PLAYER && /Image.*\(conf\. =.*\) not found/.test(e.message)
+          // #102 (content script not answering) is retried like "not found":
+          // after a navigating click the new page's content script needs a
+          // moment to boot — contact usually returns within a retry or two.
+          // This is what the JS finders' auto-wait does, and what lets the
+          // Browser Vision demos survive the click to the (now SPA) demo page.
+          return store.getState().status === C.APP_STATUS.PLAYER &&
+            (/Image.*\(conf\. =.*\) not found/.test(e.message) || /Error #102/.test(e.message))
         },
         retryInterval: (retryCount, lastRetryInterval) => {
           return 0.5 + 0.25 * retryCount
@@ -3367,6 +3589,19 @@ const runCommand = (command: any, index?: any, parentCommand?: any) => {
           }
         })
     }
+
+    case 'BClick':
+    case 'BClickText':
+    case 'BClickTextRelative':
+    case 'BClickRelative':
+    case 'BMove':
+    case 'BMoveText':
+    case 'BMoveTextRelative':
+    case 'BMoveRelative':
+    case 'BType':
+      // INTERNAL engine for uiv.browser.* (JS scripts) — not table commands.
+      // CDP-based browser input — must not warm up the XModule native host
+      return runXMouseKeyboardCommand(command)
 
     case 'XType':
     case 'XMouseWheel':

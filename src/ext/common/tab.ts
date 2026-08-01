@@ -52,29 +52,16 @@ export const getInspectTabIpc  = genGetTabIpc('toInspect', 'inspect')
 
 export const getPanelTabIpc  = genGetTabIpc('panel', 'dashboard')
 
-export async function showPanelWindow ({ params, showSettingsOnStart, selectCommandIndex }: Record<string, any> = {}): Promise<boolean> {
+export async function showPanelWindow ({ params, selectCommandIndex }: Record<string, any> = {}): Promise<boolean> {
   const state = await getState()
 
-  if (showSettingsOnStart) {
-    // update config
-   await storage.get('config')
-      .then(config => {
-        storage.set('config', {
-          ...config,
-          showSettingsOnStart: true
-        })
+  await storage.get('config')
+    .then(config => {
+      storage.set('config', {
+        ...config,
+        selectCommandIndex
       })
-  } else {
-    // update config
-    await storage.get('config')
-      .then(config => {
-        storage.set('config', {
-          ...config,
-          showSettingsOnStart: false,
-          selectCommandIndex
-        })
-      })
-  }
+    })
 
   const panelTabId = isSidePanelWindow() ?  state.tabIds.lastPanelWindow : state.tabIds.panel
   console.log('panelTabId :>> ', panelTabId)
@@ -158,14 +145,100 @@ export async function showPanelWindow ({ params, showSettingsOnStart, selectComm
   )
 }
 
+// The IDE's docked AI-chat panel is a fixed-width column; widen/narrow the
+// popup window when it toggles so the chat doesn't squeeze the command table.
+// No-op when the window is maximized/fullscreen. Called from the explicit
+// toggle actions only — never from config hydration, which would grow the
+// window a bit on every IDE start.
+export function resizeIdeWindowForAiChat (show: boolean, panelWidth?: number): Promise<void> {
+  // panel content width (user-resizable, config.ideAiChatWidth) + its 1px
+  // border — must match the panel's footprint exactly, otherwise the editor
+  // area jumps by the difference on every toggle
+  const size = (panelWidth || 320) + 1
+  const delta = show ? size : -size
+  return Ext.windows.getCurrent()
+    .then((win: chrome.windows.Window) => {
+      if (!win || win.state !== 'normal') return
+      return Ext.windows.update(win.id, { width: Math.max(520, (win.width || 850) + delta) })
+    })
+    .then(() => {}, () => {})
+}
+
+// Settings live on the options page (options.html), a normal browser tab —
+// one settings surface for the side panel, the IDE window and the background.
+// Legacy tab keys from the old settings modal map onto the page's sections.
+const SETTINGS_SECTION_MAP: Record<string, string> = {
+  replay: 'general',
+  advanced: 'replay',
+  advanced_replay: 'replay',
+  advanced_proxy: 'proxy',
+  advanced_security: 'security'
+}
+
+export async function openSettings (section?: string): Promise<void> {
+  const normalized = section ? (SETTINGS_SECTION_MAP[section] || section) : ''
+  const base = Ext.runtime.getURL('options.html')
+  const url = normalized ? `${base}#${normalized}` : base
+
+  // reuse an already-open settings tab in any window; updating only the hash
+  // fires hashchange in the page (section switch) without a reload
+  const allTabs: chrome.tabs.Tab[] = await Ext.tabs.query({}).catch(() => [])
+  const existing = (allTabs || []).find(t => (((t as any).url || (t as any).pendingUrl) || '').startsWith(base))
+  if (existing && existing.id != null) {
+    await Ext.tabs.update(existing.id, { active: true, ...(normalized ? { url } : {}) })
+    if (existing.windowId != null) {
+      await Ext.windows.update(existing.windowId, { focused: true }).catch(() => {})
+    }
+    return
+  }
+
+  // open in a NORMAL browser window — a bare tabs.create from the IDE (a
+  // popup-type window) would put the settings tab inside the IDE window
+  const wins: chrome.windows.Window[] = await Ext.windows
+    .getAll({ windowTypes: ['normal'] })
+    .catch(() => [] as chrome.windows.Window[])
+  const target = (wins || []).find(w => w.focused) || (wins || [])[0]
+
+  if (target && target.id != null) {
+    await Ext.tabs.create({ windowId: target.id, url, active: true })
+    await Ext.windows.update(target.id, { focused: true }).catch(() => {})
+  } else {
+    // no browser window at all (edge case) — create one
+    await Ext.windows.create({ url })
+  }
+}
+
 export function withPanelIpc (options?: Record<string, any>) {
+  const openViaWindow = () => {
+    return showPanelWindow(options)
+    .then(() => getPanelTabIpc(6 * 1000))
+  }
+
+  // Sidebar-first: the caller already kicked off chrome.sidePanel.open() in
+  // the user-gesture context (see tryOpenSidePanelForRun in bg.js — it cannot
+  // be done here, any prior await voids the gesture). Poll until the panel
+  // page has booted and registered itself, then use it; if it never shows up,
+  // fall back to the IDE window.
+  if (options && options.panelAlreadyOpening) {
+    const deadline = Date.now() + 10 * 1000
+
+    const poll = (): Promise<any> => {
+      return checkIfSidePanelOpen().then((isOpen) => {
+        if (isOpen) return getPanelTabIpc(6 * 1000)
+        if (Date.now() > deadline) return openViaWindow()
+        return delay(poll, 500)
+      })
+    }
+
+    return poll()
+  }
+
   return checkIfSidePanelOpen().then((isSidePanelOpen) => {
     if (isSidePanelOpen) {
       return getPanelTabIpc(6 * 1000)
-    } else {
-      return showPanelWindow(options)
-      .then(() => getPanelTabIpc(6 * 1000))          
     }
+
+    return openViaWindow()
   })
 }
 

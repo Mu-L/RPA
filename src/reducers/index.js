@@ -244,6 +244,14 @@ export default function reducer (state = initialState, action) {
         )
       )(state)
 
+    // JS script macros: the program lives in editing.script; unsaved tracking
+    // works like command edits (script is part of the compared macro data)
+    case T.UPDATE_SCRIPT:
+      return compose(
+        updateHasUnSaved,
+        setIn(['editor', 'editing', 'script'], action.data.script)
+      )(state)
+
     case T.REMOVE_COMMAND:
       return compose(
         setEditingSourceCurrent,
@@ -450,28 +458,6 @@ export default function reducer (state = initialState, action) {
       )(state)
     }
 
-    case T.SET_TEST_SUITES:
-      return setIn(['editor', 'testSuites'], action.data, state)
-
-    case ActionTypes.updateTestSuite: {
-      const { id, updated } = action.data
-      const index = state.editor.testSuites.findIndex(ts => ts.id === id)
-
-      if (index === -1) return state
-      return setIn(['editor', 'testSuites', index], updated, state)
-    }
-
-    case T.UPDATE_TEST_SUITE_STATUS: {
-      const { id, extra } = action.data
-      if (!id)  return state
-
-      return updateIn(
-        ['editor', 'testSuitesExtra'],
-        data => ({...data, [id]: extra}),
-        state
-      )
-    }
-
     case T.SET_EDITING:
       // log('REDUCER SET_EDITING', action.data)
 
@@ -596,16 +582,8 @@ export default function reducer (state = initialState, action) {
       return setIn(['editor', 'macrosExtra'], action.data, state)
     }
 
-    case T.SET_TEST_SUITES_EXTRA: {
-      return setIn(['editor', 'testSuitesExtra'], action.data, state)
-    }
-
     case ActionTypes.setMacroFolderStructure: {
       return setIn(['editor', 'macroFolderStructure'], action.data, state)
-    }
-
-    case ActionTypes.setTestSuiteFolderStructure: {
-      return setIn(['editor', 'testSuiteFolderStructure'], action.data, state)
     }
 
     case T.SET_PLAYER_STATE:

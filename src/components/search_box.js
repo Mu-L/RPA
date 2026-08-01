@@ -1,5 +1,5 @@
 import React from 'react'
-import { Input, Icon } from 'antd'
+import { Input } from 'antd'
 import { CloseCircleOutlined, SearchOutlined } from '@ant-design/icons';
 
 

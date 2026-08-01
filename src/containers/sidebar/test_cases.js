@@ -20,6 +20,7 @@ import { prompt } from '../../components/prompt';
 import getSaveTestCase from '../../components/save_test_case';
 import { FileNodeType, FileTree } from '../../components/tree_file';
 import config from '../../config';
+import { runScript } from '../../modules/script_runner';
 import { getFilteredMacroFileNodeData, getMacroFileNodeData, getMacroFileNodeList, getShouldIgnoreTargetOptions, getShouldLoadResources, isFocusOnSidebar, isMacroFolderNodeListEmpty, isPlaying } from '../../recomputed';
 import { RunBy } from '../../reducers/state';
 import { getLicenseService } from '../../services/license';
@@ -105,6 +106,14 @@ class SidebarTestCases extends React.Component {
       if (!shouldPlay)  return
 
       setTimeout(() => {
+        // JS script macro: run it through the interpreter, not the player
+        if (typeof this.props.editing.script === 'string') {
+          runScript(this.props.editing.script).catch(e => {
+            message.error(`Script failed to start: ${(e && e.message) || e}`, 3)
+          })
+          return
+        }
+
         const { commands } = this.props.editing
         const openTc  = commands.find(item => item.cmd.toLowerCase() === 'open')
         const { src } = this.props.editing.meta
@@ -194,6 +203,18 @@ class SidebarTestCases extends React.Component {
       if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) {
         return
       }
+
+      // Never steal keys from a text field. This listener is on the DOCUMENT
+      // in the CAPTURE phase, so without this check it wins over whatever the
+      // user is actually typing in — a CodeMirror editor, a rename box, the AI
+      // chat input — and up/down jumps to another macro mid-edit.
+      const el = e.target
+      const tag = el && el.tagName ? el.tagName.toLowerCase() : ''
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' ||
+          (el && el.isContentEditable) || (el && el.closest && el.closest('.CodeMirror'))) {
+        return
+      }
+
 
       switch (keycode(e)) {
         case 'up':
@@ -781,14 +802,13 @@ export default connect(
     macroFileNodeData: getMacroFileNodeData(state),
     macros: getMacroFileNodeList(state),
     isPlaying: isPlaying(state),
-    testSuites: state.editor.testSuites,
     editing: state.editor.editing,
     player: state.player,
     config: state.config,
     ignoreTargetOptions: getShouldIgnoreTargetOptions(state),
     searchText: state.macroQuery,
     filteredMacroFileNodeData: getFilteredMacroFileNodeData(state),
-    canUseKeyboardShortcuts: isFocusOnSidebar(state) && state.ui.sidebarTab !== 'test_suites'
+    canUseKeyboardShortcuts: isFocusOnSidebar(state)
   }),
   dispatch => bindActionCreators({...actions, ...simpleActions}, dispatch)
 )(SidebarTestCases)

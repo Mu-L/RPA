@@ -5,6 +5,8 @@ import { compose, isWindows } from '@/common/ts_utils'
 import { store } from '@/redux'
 import { NO_ANTHROPIC_API_KEY_ERROR } from '../anthropic'
 import Sampling, { ClaudeSamplingMessage, SamplingError, SamplingParams } from './sampling'
+import OpenAICompatSampling, { ISamplingEngine } from '../openai_compatible/sampling'
+import { getInstallIdSync, isFreeTierConsentPending, mapUIVisionFreeTierError } from '../uivision_free_tier'
 import { ComputerUseMessageType } from './model'
 
 interface ComputerUseServiceParams {
@@ -16,16 +18,84 @@ interface ComputerUseServiceParams {
   getTerminationRequest?: (loopCompletedCount: number) => 'max_loop_reached' | 'player_stopped' | 'stop_requested' | undefined
 }
 
-const uivError = (error: any) => {
+// Which AI backend drives the agent loop (set in Settings > AI)
+export type AIProviderConfig = {
+  provider: 'anthropic' | 'openrouter' | 'local' | 'uivision'
+  apiKey: string
+  baseURL: string
+  model: string
+  label: string
+}
+
+// API keys arrive via copy/paste, which likes to add whitespace or capitalize
+// the first letter ("Sk-or-..." — OpenRouter then answers 401 "Missing
+// Authentication header", which reads like an extension bug). Normalized here
+// on read (heals keys already stored with the artifact) and in the AI
+// settings tab on save.
+export const normalizeApiKey = (key: string): string => key.trim().replace(/^sk-/i, 'sk-')
+
+export const getAIProviderConfig = (): AIProviderConfig => {
+  const config = store.getState().config
+  // Default is the free tier so new installs have working AI out of the box
+  // (explicit decision — the tier exists to promote extension usage). Users
+  // with a saved aiProvider keep their choice.
+  const provider = config.aiProvider || 'uivision'
+
+  switch (provider) {
+    case 'uivision':
+      return {
+        provider,
+        // pseudonymous install ID rides in the existing Bearer header
+        apiKey: getInstallIdSync(),
+        baseURL: C.OPENAI_COMPAT.UIVISION_BASE_URL,
+        model: C.OPENAI_COMPAT.UIVISION_PLACEHOLDER_MODEL,
+        label: 'Ui.Vision AI'
+      }
+    case 'openrouter':
+      return {
+        provider,
+        apiKey: normalizeApiKey(config.openRouterAPIKey || ''),
+        baseURL: C.OPENAI_COMPAT.OPENROUTER_BASE_URL,
+        model: config.openRouterModel || C.OPENAI_COMPAT.DEFAULT_OPENROUTER_MODEL,
+        label: 'OpenRouter'
+      }
+    case 'local':
+      return {
+        provider,
+        apiKey: '',
+        baseURL: config.localAIBaseURL || C.OPENAI_COMPAT.DEFAULT_LOCAL_BASE_URL,
+        model: config.localAIModel || '',
+        label: 'Local AI'
+      }
+    default:
+      return {
+        provider: 'anthropic',
+        apiKey: normalizeApiKey(config.anthropicAPIKey || ''),
+        baseURL: '',
+        model: config.anthropicModel || C.ANTHROPIC.COMPUTER_USE_MODEL,
+        label: 'Anthropic'
+      }
+  }
+}
+
+const uivError = (error: any, providerLabel = 'Anthropic') => {
   if (error instanceof Error) {
+    const freeTierMessage = mapUIVisionFreeTierError(error.message)
+    if (freeTierMessage) {
+      return new Error(freeTierMessage)
+    }
     if (error.message.includes('Expected either apiKey or authToken to be set')) {
       return new Error(NO_ANTHROPIC_API_KEY_ERROR)
-    } else if (error.message.includes('invalid x-api-key')) {
+    } else if (error.message.includes('Missing Authentication header')) {
+      // OpenRouter's 401 when the Bearer token parses as empty — in practice
+      // a paste artifact (whitespace or "Sk-" capitalization) in the key
+      return new Error('The API key looks malformed (extra spaces or a capitalized "Sk-" prefix?). Please re-enter it in Settings > AI.')
+    } else if (error.message.includes('invalid x-api-key') || error.message.includes('HTTP 401')) {
       return new Error('Invalid API key. Please re-enter the API key, and save it.')
     }
-    return new Error(`E352: Anthropic API returned error: ${error.message}`)
+    return new Error(`E352: ${providerLabel} API returned error: ${error.message}`)
   }
-  return new Error(`E352: Anthropic API returned error: ${error.message}`)
+  return new Error(`E352: ${providerLabel} API returned error: ${error.message}`)
 }
 
 export class ComputerUseService {
@@ -33,7 +103,9 @@ export class ComputerUseService {
   private currentLoop = 0
   private _getTerminationRequest: (loopCompletedCount: number) => 'max_loop_reached' | 'player_stopped' | 'stop_requested' | undefined
   private messages: ClaudeSamplingMessage[] = []
-  private sampling: Sampling
+  private sampling: ISamplingEngine
+  // provider+model+baseURL the current sampling was built for — recreate on change
+  private samplingKey = ''
 
   constructor(private params: ComputerUseServiceParams) {
     this._logMessage = params.logMessage || this.panelLogMessage
@@ -70,23 +142,43 @@ export class ComputerUseService {
   }
 
   private createNewSampling = () => {
-    let anthropicAPIKey = store.getState().config.anthropicAPIKey
-    const samplingProps: SamplingParams = {
-      model: C.ANTHROPIC.COMPUTER_USE_MODEL,
-      anthropicAPIKey: anthropicAPIKey,
-      captureScreenShotFunction: this.params.captureScreenShotFunction,
-      handleMouseAction: this.handleMouseAction,
-      handleKeyboardAction: this.handleKeyboardAction,
-      getTerminationRequest: this._getTerminationRequest,
-      logMessage: this._logMessage
-    }
+    const providerConfig = getAIProviderConfig()
+
     this.messages = []
     this.currentLoop = 0
-    this.sampling = new Sampling(samplingProps)
+    this.samplingKey = `${providerConfig.provider}|${providerConfig.model}|${providerConfig.baseURL}`
+
+    if (providerConfig.provider === 'anthropic') {
+      const samplingProps: SamplingParams = {
+        model: providerConfig.model,
+        anthropicAPIKey: providerConfig.apiKey,
+        captureScreenShotFunction: this.params.captureScreenShotFunction,
+        handleMouseAction: this.handleMouseAction,
+        handleKeyboardAction: this.handleKeyboardAction,
+        getTerminationRequest: this._getTerminationRequest,
+        logMessage: this._logMessage
+      }
+      this.sampling = new Sampling(samplingProps)
+    } else {
+      this.sampling = new OpenAICompatSampling({
+        task: 'ai.computerUse',
+        baseURL: providerConfig.baseURL,
+        apiKey: providerConfig.apiKey,
+        model: providerConfig.model,
+        captureScreenShotFunction: this.params.captureScreenShotFunction,
+        handleMouseAction: this.handleMouseAction,
+        handleKeyboardAction: this.handleKeyboardAction,
+        getTerminationRequest: this._getTerminationRequest,
+        logMessage: this._logMessage
+      })
+    }
   }
 
-  private getSampling = (): Sampling => {
-    if (!this.sampling) {
+  private getSampling = (): ISamplingEngine => {
+    const providerConfig = getAIProviderConfig()
+    const key = `${providerConfig.provider}|${providerConfig.model}|${providerConfig.baseURL}`
+
+    if (!this.sampling || key !== this.samplingKey) {
       this.createNewSampling()
     }
     return this.sampling
@@ -132,6 +224,11 @@ export class ComputerUseService {
 
     console.log('originalCoords:>> ', originalCoords)
 
+    // Browser scope uses the CDP-based B commands (no XModule needed, works
+    // with the window in the background). Desktop scope still needs XModule.
+    const clickCmd = isDesktop ? 'XClick' : 'BClick'
+    const moveCmd = isDesktop ? 'XMove' : 'BMove'
+
     const executeMouseCommand = (command: any) => {
       console.log('executeMouseCommand:>> command:>> ', command)
       console.log('#220 executeMouseCommand:>> isDesktop:>> ', isDesktop)
@@ -139,32 +236,32 @@ export class ComputerUseService {
       const target = `${originalCoords.x},${originalCoords.y}`
       switch (command) {
         case 'mouse_move':
-          this._logMessage(`Action: XMove target: ${target}`, 'status')
-          store.dispatch(act.addLog('info', `Running XMove command target: ${target}`))
+          this._logMessage(`Action: ${moveCmd} target: ${target}`, 'status')
+          store.dispatch(act.addLog('info', `Running ${moveCmd} command target: ${target}`))
           return this._runCsFreeCommand({
-            cmd: 'XMove',
+            cmd: moveCmd,
             target: `${originalCoords.x},${originalCoords.y}`
           })
         case 'left_click':
-          this._logMessage(`Action: XClick target: ${target}`, 'status')
-          store.dispatch(act.addLog('info', `Running XClick command target: ${target}`))
+          this._logMessage(`Action: ${clickCmd} target: ${target}`, 'status')
+          store.dispatch(act.addLog('info', `Running ${clickCmd} command target: ${target}`))
           return this._runCsFreeCommand({
-            cmd: 'XClick',
+            cmd: clickCmd,
             target: `${originalCoords.x},${originalCoords.y}`
           })
         case 'right_click':
-          this._logMessage(`Action: XClick (#right) target: ${target}`, 'status')
-          store.dispatch(act.addLog('info', `Running XClick (#right) command target: ${target}`))
+          this._logMessage(`Action: ${clickCmd} (#right) target: ${target}`, 'status')
+          store.dispatch(act.addLog('info', `Running ${clickCmd} (#right) command target: ${target}`))
           return this._runCsFreeCommand({
-            cmd: 'XClick',
+            cmd: clickCmd,
             target: `${originalCoords.x},${originalCoords.y}`,
             value: '#right'
           })
         case 'double_click':
-          this._logMessage(`Action: XClick (#doubleclick) target: ${target}`, 'status')
-          store.dispatch(act.addLog('info', `Running XClick (#doubleclick) command target: ${target}`))
+          this._logMessage(`Action: ${clickCmd} (#doubleclick) target: ${target}`, 'status')
+          store.dispatch(act.addLog('info', `Running ${clickCmd} (#doubleclick) command target: ${target}`))
           return this._runCsFreeCommand({
-            cmd: 'XClick',
+            cmd: clickCmd,
             target: `${originalCoords.x},${originalCoords.y}`,
             value: '#doubleclick'
           })
@@ -174,7 +271,7 @@ export class ComputerUseService {
       }
     }
 
-    const uiVisionCmd = action.command === 'mouse_move' ? 'XMove' : 'XClick'
+    const uiVisionCmd = action.command === 'mouse_move' ? moveCmd : clickCmd
 
     return executeMouseCommand(action.command)
       .then((result: any) => {
@@ -204,15 +301,18 @@ export class ComputerUseService {
   handleKeyboardAction = async (action: any) => {
     console.log('handleKeyboardAction:>> action::', action)
 
+    // Browser scope types via CDP (BType, no XModule); desktop scope needs XType
+    const typeCmd = this.params.isDesktop ? 'XType' : 'BType'
+
     const executeKeyboardCommand = (action: any) => {
       console.log('executeKeyboardCommand:>> action:>> ', action)
       switch (action.type) {
         case 'keyboard':
         case 'text':
-          store.dispatch(act.addLog('info', `Running XType command, value: ${action.value}`))
+          store.dispatch(act.addLog('info', `Running ${typeCmd} command, value: ${action.value}`))
 
           return this._runCsFreeCommand({
-            cmd: 'XType',
+            cmd: typeCmd,
             target: action.value
           })
         default:
@@ -242,19 +342,31 @@ export class ComputerUseService {
   }
 
   run = async (promptText: string, value: string, vars: any) => {
+    const providerConfig = getAIProviderConfig()
     try {
-      let anthropicAPIKey = store.getState().config.anthropicAPIKey
-
-      if (!anthropicAPIKey) {
+      if (providerConfig.provider === 'uivision' && isFreeTierConsentPending(store.getState().config)) {
+        throw new Error('One-time AI setup needed: choose the free Ui.Vision AI in the AI chat, or pick a provider in Settings > AI.')
+      }
+      if (providerConfig.provider === 'anthropic' && !providerConfig.apiKey) {
         throw new Error(NO_ANTHROPIC_API_KEY_ERROR)
       }
+      if (providerConfig.provider === 'openrouter' && !providerConfig.apiKey) {
+        throw new Error('No OpenRouter API key set. Please enter it in Settings > AI.')
+      }
+      if (providerConfig.provider === 'local' && !providerConfig.model) {
+        throw new Error('No local AI model name set. Please enter it in Settings > AI.')
+      }
 
-      this._logMessage('Computer Use sequence start:')
+      // uivision: model is a server-side choice, never display one
+      const showModel = providerConfig.provider !== 'anthropic' && providerConfig.provider !== 'uivision'
+      this._logMessage(`Computer Use sequence start (${providerConfig.label}${showModel ? ': ' + providerConfig.model : ''}):`)
       this._logMessage(promptText, 'user')
 
       console.log('Running sampling...')
 
-      this.sampling.setAPIKey(anthropicAPIKey)
+      // Recreates the sampling engine if the provider/model changed in settings
+      this.sampling = this.getSampling()
+      this.sampling.setAPIKey(providerConfig.apiKey)
 
       return this.sampling
         .run(promptText, this.messages)
@@ -291,7 +403,9 @@ export class ComputerUseService {
           } else {
             const messages = result //.content[0].text
             const aiMessages = messages.filter((message: any) => message.role === 'assistant')
-            const aiResponse = aiMessages[aiMessages.length - 1]?.content?.[0]?.text
+            const lastContent = aiMessages[aiMessages.length - 1]?.content
+            // Anthropic stores content as [{type:'text', text}], OpenAI-compatible as a plain string
+            const aiResponse = typeof lastContent === 'string' ? lastContent : lastContent?.[0]?.text
 
             // found the target
             const newVars = (() => {
@@ -317,7 +431,7 @@ export class ComputerUseService {
 
           this.messages = error.messages
 
-          throw uivError(error)
+          throw uivError(error, providerConfig.label)
         })
     } catch (error) {
       console.error('Error in aiComputerUse:', error)

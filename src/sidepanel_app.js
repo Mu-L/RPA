@@ -78,7 +78,7 @@ class SidepanelApp extends Component {
       return (
         <div className="app no-display">
           <div className="sidepanel content">
-            <div className="status">UI.Vision is in "No Display" mode now</div>
+            <div className="status">Ui.Vision is in "No Display" mode now</div>
             <Button.Group className="simple-actions">
               <Button size="large" onClick={() => this.getPlayer().stop()}>
                 <span>Stop</span>

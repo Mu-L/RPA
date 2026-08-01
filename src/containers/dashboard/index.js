@@ -1,6 +1,8 @@
-import { faTableColumns } from '@fortawesome/free-solid-svg-icons'
+// Deep-path import keeps webpack from bundling the whole icon set (tree-shaking
+// is disabled by the CommonJS babel transform in webpack.prod.config.js)
+import { faTableColumns } from '@fortawesome/free-solid-svg-icons/faTableColumns'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { Button, Modal } from 'antd'
+import { Button, Modal, Popover } from 'antd'
 import React from 'react'
 import { connect } from 'react-redux'
 import { bindActionCreators } from 'redux'
@@ -11,6 +13,7 @@ import { getState } from '@/ext/common/global_state'
 import * as actions from '../../actions'
 import { delayMs } from '../../common/utils'
 import getSaveTestCase from '../../components/save_test_case'
+import { goUivUrl } from '@/common/uiv_link'
 import DashboardBottom from './bottom'
 import './dashboard.scss'
 import DashboardEditor from './editor'
@@ -53,7 +56,34 @@ class Dashboard extends React.Component {
     }
   }
 
+  // "Close IDE and continue here" on the side panel's overlay asks this window
+  // to save its work and close itself — a raw tabs.remove from outside would
+  // drop unsaved edits. ACK synchronously so the sender knows the request is
+  // handled; the actual close may wait on the "Save macro as.." prompt when
+  // the macro was never saved before.
+  handleRuntimeMessage = (req, sender, sendResponse) => {
+    if (!req || req.type !== 'IDE_SAVE_AND_CLOSE') return
+
+    sendResponse('ide-ack')
+
+    const meta = this.props.editing && this.props.editing.meta
+    const needsSaveAsPrompt = meta && meta.hasUnsaved && !meta.src
+    const focus = needsSaveAsPrompt
+      ? Ext.windows.getCurrent().then(win => Ext.windows.update(win.id, { focused: true }))
+      : Promise.resolve()
+
+    focus
+      .then(() => getSaveTestCase().save())
+      .then(saved => {
+        // saved === false: the user canceled the Save-As prompt — stay open
+        if (saved !== false) window.close()
+      })
+      .catch(err => console.log('IDE_SAVE_AND_CLOSE save err:>>', err))
+  }
+
   componentDidMount () {
+    Ext.runtime.onMessage.addListener(this.handleRuntimeMessage)
+
     // firefox requires explicit permission to access all urls
     // otherwise user will need to allow access for each url manually  
     if(Ext.isFirefox()) {
@@ -100,15 +130,26 @@ class Dashboard extends React.Component {
     this.setState({ bottomPanelHeight: height })
   }
 
+  // first-switch hint (see controlbar/index.js): set by the sidebar's IDE
+  // buttons, shown here on the button that leads back — until "Got it"
+  shouldShowInterfaceHint = () => {
+    return this.props.config.interfaceHintTarget === 'ide' &&
+           !this.props.config.interfaceHintDismissed
+  }
+
+  dismissInterfaceHint = () => {
+    this.props.updateConfig({ interfaceHintDismissed: true, interfaceHintTarget: null })
+  }
+
   onGrantPermission = () => {
     Ext.permissions.request({origins: ['<all_urls>']}).then((result) => {
       console.log('permission result:>>', result)  
       if(result) { 
         this.setState({ permissionRequired: false})
       } else {
-        // visit https://goto.ui.vision/x/idehelp?help=firefox_access_data_permission in new tab 
+        // visit https://go.ui.vision/?help=firefox_access_data_permission in new tab 
         Ext.tabs.create({
-          url: 'https://goto.ui.vision/x/idehelp?help=firefox_access_data_permission',
+          url: goUivUrl('https://go.ui.vision/?help=firefox_access_data_permission'),
           active: true
         })
       }
@@ -124,10 +165,32 @@ class Dashboard extends React.Component {
         <DashboardBottom onBottomPanelHeightChange={this.onBottomPanelHeightChange} />
 
         <div className="online-help">
+          <Popover
+            open={this.shouldShowInterfaceHint()}
+            placement="topLeft"
+            overlayClassName="interface-hint-popover"
+            content={
+              <div className="interface-hint">
+                <p>
+                  Side Panel or IDE window — use whichever you like, your
+                  macros are the same in both. Pick which one opens by
+                  default in <strong>Settings &gt; General</strong>.
+                </p>
+                <Button size="small" type="primary" onClick={this.dismissInterfaceHint}>
+                  Got it
+                </Button>
+              </div>
+            }
+          >
           <Button className="btn-open-in-sidepanel"
             disabled={this.state.isOpenInSidePanelBtnActive && this.props.player.status === C.PLAYER_STATUS.STOPPED ? false : true}
             onClick={async () => {
               console.log('this.state.tabIdToPlay:>>', this.state.tabIdToPlay)
+
+              // first switch to the side panel: show the settings hint there
+              if (!this.props.config.interfaceHintDismissed) {
+                this.props.updateConfig({ interfaceHintTarget: 'sidepanel' })
+              }
 
               if (Ext.isFirefox()) {
                 // below code doesn't work if it runs in IDE, but works if it runs in sidePanel or background
@@ -164,8 +227,9 @@ class Dashboard extends React.Component {
             }}
           >
             <FontAwesomeIcon icon={faTableColumns} />
-            <span>Open in Side Panel</span> 
+            <span>Continue in Side Panel</span>
           </Button>
+          </Popover>
           {
             this.state.permissionRequired &&  
             <Button
@@ -178,13 +242,13 @@ class Dashboard extends React.Component {
           </Button>
           }
           <div style={{ visibility: isWindows ? 'visible' : 'hidden' }}>
-            <a href="https://goto.ui.vision/x/idehelp?help=visual" target="_blank"></a>
+            <a href="https://go.ui.vision/?help=visual" target="_blank"></a>
           </div>
           <div>
             Ui.Vision Community:&nbsp;
-            <a href="https://goto.ui.vision/x/idehelp?help=forum" target="_blank">Forums</a>&nbsp;|&nbsp; 
-            <a href="https://goto.ui.vision/x/idehelp?help=docs" target="_blank">Docs</a>&nbsp;|&nbsp;
-            <a href="https://goto.ui.vision/x/idehelp?help=github" target="_blank">Open-Source</a>
+            <a href="https://go.ui.vision/?help=forum" target="_blank">Forums</a>&nbsp;|&nbsp; 
+            <a href="https://go.ui.vision/?help=docs" target="_blank">Docs</a>&nbsp;|&nbsp;
+            <a href="https://go.ui.vision/?help=github" target="_blank">Open-Source</a>
           </div>
         </div>
       </div>
@@ -193,8 +257,10 @@ class Dashboard extends React.Component {
 }
 
 export default connect(
-  state => ({ 
+  state => ({
     player: state.player,
+    editing: state.editor.editing,
+    config: state.config,
   }),
   dispatch => bindActionCreators({...actions}, dispatch)
 )(Dashboard)

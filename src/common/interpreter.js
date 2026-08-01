@@ -307,7 +307,11 @@ export default class Interpreter {
             throw new Error(`No loop found for this break (at command #${index + 1})`)
           }
           
-          this.setExtraByKey('times_1', 0);
+          // Reset the loop cursor of the times loop being broken out of,
+          // so a later re-entry starts counting at 1 again
+          if (/^times/.test(tag.type)) {
+            this.removeExtraByKey(this.getKeyForTimes(tag.start.index))
+          }
           this.addBreak({
             command: command, // for debugging purpose
             targetTagStartIndex: tag.start.index,

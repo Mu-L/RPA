@@ -1,0 +1,441 @@
+// Settings page (options.html): full-page layout with a sticky left nav —
+// one settings surface replacing the old 700px modal. The per-pane rules
+// below were carried over from header.scss (.settings-modal ...) so the
+// extracted tab components keep rendering as before.
+
+.settings-page {
+  display: flex;
+  min-height: 100vh;
+  background: #f4f6f9;
+  font-size: 14px;
+}
+
+// ---------------------------------------------------------------------------
+// left nav
+// ---------------------------------------------------------------------------
+
+.settings-nav {
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  flex: 0 0 168px;
+  height: 100vh;
+  overflow-y: auto;
+  padding: 14px 8px;
+  box-sizing: border-box;
+  background: #fff;
+  border-right: 1px solid #e3e8ef;
+
+  .settings-brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 8px 14px;
+
+    img {
+      width: 26px;
+      height: 26px;
+    }
+
+    .settings-brand-title {
+      font-size: 15px;
+      font-weight: 600;
+      line-height: 1.2;
+    }
+
+    .settings-brand-sub {
+      font-size: 12px;
+      color: #7a8699;
+    }
+  }
+
+  .settings-nav-group {
+    margin-bottom: 10px;
+  }
+
+  .settings-nav-group-title {
+    padding: 8px 8px 3px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #8a94a6;
+  }
+
+  .settings-nav-item {
+    display: block;
+    padding: 6px 8px;
+    margin-bottom: 1px;
+    border-radius: 6px;
+    color: #3d4757;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: background 0.15s;
+
+    &:hover {
+      background: #eef2f7;
+      color: #1a6ce0;
+    }
+
+    &.active {
+      background: #e7f0fd;
+      color: #1a6ce0;
+      font-weight: 600;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// content column
+// ---------------------------------------------------------------------------
+
+.settings-content {
+  flex: 1;
+  min-width: 0;
+  // tight gutters: the page is often viewed in a narrow window, and every
+  // pixel spent on the grey frame is a pixel the forms wrap in
+  padding: 14px 16px 40px;
+
+  .settings-section {
+    // no max-width: the section uses the window it is given
+    background: #fff;
+    border: 1px solid #e3e8ef;
+    border-radius: 10px;
+    padding: 18px 20px 24px;
+    box-shadow: 0 1px 3px rgba(16, 30, 54, 0.06);
+  }
+
+  .settings-section-title {
+    margin: 0 0 3px;
+    font-size: 20px;
+    font-weight: 600;
+  }
+
+  .settings-section-hint {
+    margin: 0 0 18px;
+    color: #7a8699;
+  }
+
+  // -------------------------------------------------------------------------
+  // shared bits used across the extracted tabs (from header.scss)
+  // -------------------------------------------------------------------------
+
+  .ant-checkbox-wrapper + .ant-checkbox-wrapper {
+    margin-left: 0;
+  }
+
+  .ant-checkbox-wrapper {
+    margin-bottom: 5px;
+  }
+
+  .tip {
+    margin-left: 15px;
+    color: #aaa;
+  }
+
+  label[title='Replay Helper'],
+  label[title='Ui.Vision Side Panel'] {
+    align-items: start;
+  }
+
+  .row {
+    margin-bottom: 10px;
+  }
+
+  .label-text {
+    margin-right: 15px;
+  }
+
+  .xmodule-item {
+    margin-bottom: 25px;
+    padding: 15px;
+    border: 1px solid #d9dde3;
+    border-radius: 10px;
+    font-size: 14px;
+
+    label {
+      margin-right: 8px;
+      font-size: 14px;
+    }
+
+    .xmodule-title {
+      margin-bottom: 10px;
+      font-size: 14px;
+
+      & > * {
+        margin-right: 20px;
+
+        &:last-child {
+          margin-right: 0;
+        }
+      }
+    }
+
+    .xmodule-status {
+      display: flex;
+      align-items: baseline;
+      margin-bottom: 20px;
+
+      .status-box {
+        display: flex;
+        align-items: baseline;
+        gap: 15px;
+      }
+    }
+
+    .xmodule-settings {
+      h3 {
+        margin-bottom: 10px;
+        font-size: 14px;
+        font-weight: bold;
+      }
+
+      .xmodule-settings-item {
+        .settings-detail {
+          display: flex;
+          flex-direction: row;
+          margin-bottom: 10px;
+
+          .settings-detail-content {
+            flex: 1;
+          }
+        }
+      }
+
+      .check-result {
+        margin-top: 5px;
+        color: red;
+        font-size: 13px;
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // per-tab panes (from header.scss, minus the modal padding)
+  // -------------------------------------------------------------------------
+
+  .backup-pane {
+    h4 {
+      font-size: 16px;
+      margin-bottom: 10px;
+    }
+
+    p {
+      margin-bottom: 5px;
+    }
+  }
+
+  .api-pane {
+    p {
+      margin: 20px 0;
+
+      &:first-child {
+        margin-top: 0;
+      }
+    }
+  }
+
+  .security-pane {
+    h4 {
+      font-size: 16px;
+      margin-bottom: 10px;
+    }
+
+    p {
+      margin-bottom: 10px;
+    }
+
+    label {
+      margin-right: 10px;
+    }
+
+    .ant-radio-group {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .ant-radio-wrapper {
+      height: 30px;
+      line-height: 30px;
+    }
+
+    .input-line {
+      display: flex;
+      align-items: center;
+      margin-bottom: 10px;
+
+      .input-label {
+        width: 120px;
+      }
+
+      .ant-checkbox-wrapper {
+        margin-left: 15px;
+      }
+
+      a {
+        margin-left: 20px;
+      }
+    }
+  }
+
+  .ocr-pane {
+    p {
+      margin-bottom: 10px;
+    }
+
+    .row {
+      margin-bottom: 20px;
+    }
+
+    .radio-block {
+      .ant-radio-wrapper {
+        display: flex;
+        flex-direction: row;
+        line-height: 30px;
+
+        .ant-radio {
+          margin-top: 4px;
+        }
+
+        .offline-label {
+          display: inline-block;
+          width: 80px;
+        }
+      }
+    }
+
+    .ant-checkbox {
+      align-self: start;
+      margin-top: 2px;
+    }
+  }
+
+  .vision-pane {
+    p {
+      margin-bottom: 10px;
+    }
+
+    code {
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: #f0f2f5;
+      font-size: 13px;
+    }
+
+    .ant-radio-wrapper {
+      display: flex;
+      flex-direction: row;
+      line-height: 30px;
+
+      .ant-radio {
+        margin-top: 8px;
+        align-self: start;
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // AI tab (from header.scss .ai-tab)
+  // -------------------------------------------------------------------------
+
+  .ai-tab {
+    .ai-settings-item {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      margin-bottom: 20px;
+
+      .label-text {
+        min-width: 60px;
+      }
+
+      input {
+        width: 300px;
+      }
+
+      button {
+        margin-left: 10px;
+      }
+    }
+
+    .ai-response {
+      margin-bottom: 10px;
+      width: 100%;
+
+      pre {
+        text-wrap: auto;
+        border: 1px solid lightgray;
+        padding: 5px;
+        border-radius: 5px;
+        height: 60px;
+        line-height: 17px;
+      }
+    }
+  }
+}
+
+.api-key-notification {
+  font-size: 12px;
+  margin-left: 8px;
+}
+
+// ---------------------------------------------------------------------------
+// dark theme (colors match src/styles/_dark-theme-variables.scss)
+// ---------------------------------------------------------------------------
+
+html[data-theme='dark'] {
+  .settings-page {
+    background: #1f242b;
+    // antd's reset puts colorText on <body>, which beats the color set on
+    // html[data-theme=dark] — without this every plain <span>/<p> on the page
+    // keeps the LIGHT theme's near-black text on the dark background
+    color: #f6f6f9;
+  }
+
+  .settings-nav {
+    background: #23272f;
+    border-right-color: #353b46;
+
+    .settings-brand-title {
+      color: #f6f6f9;
+    }
+
+    .settings-nav-item {
+      color: #c2c9d4;
+
+      &:hover {
+        background: #2b323c;
+        color: #7ea3e1;
+      }
+
+      &.active {
+        background: #2b3a51;
+        color: #7ea3e1;
+      }
+    }
+  }
+
+  .settings-content {
+    .settings-section {
+      background: #23272f;
+      border-color: #353b46;
+      box-shadow: none;
+    }
+
+    .settings-section-title {
+      color: #f6f6f9;
+    }
+
+    .xmodule-item {
+      border-color: #353b46;
+    }
+
+    .vision-pane code {
+      background: #2b323c;
+    }
+
+    .ai-tab .ai-response pre {
+      border-color: #444;
+    }
+  }
+}

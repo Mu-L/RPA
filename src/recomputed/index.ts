@@ -2,33 +2,11 @@ import { createSelector } from 'reselect'
 import { UNTITLED_ID, APP_STATUS, PLAYER_STATUS } from '@/common/constant'
 import { Macro, Command } from '@/services/player/macro'
 import { MacroExtraData, MacroResultStatus } from '@/services/kv_data/macro_extra_data'
-import { TestSuite } from '@/common/convert_suite_utils';
-import { TestSuitExtraData } from '@/services/kv_data/test_suite_extra_data';
 import { EntryNode } from '@/services/storage/std/standard_storage';
 import { FileNodeData, FileNodeType } from '@/components/tree_file';
 import { treeMap, flatten, traverseTree, TraverseTreeResult, id, treeFilter } from '@/common/ts_utils';
 import { Without } from '@/common/types';
 import { State, FolderExtraData, RunBy, FocusArea } from '@/reducers/state';
-
-export const getTestSuitesWithAllInfo = createSelector(
-  [
-    (state: State) => state.editor.testSuites,
-    (state: State) => state.editor.testSuitesExtra
-  ],
-  (testSuites: TestSuite[], testSuitesExtra: Record<string, TestSuitExtraData>) => {
-    const getKey = (ts: TestSuite) => ts.id
-
-    return testSuites.map(ts => {
-      const key   = getKey(ts)
-      const extra = testSuitesExtra[key || '']
-
-      return {
-        ...ts,
-        ...(extra || {})
-      }
-    })
-  }
-)
 
 export const getCurrentMacroId = createSelector(
   [
@@ -115,6 +93,58 @@ export const getShouldIgnoreTargetOptions = createSelector(
   (config): boolean => !config.saveAlternativeLocators
 )
 
+// Both editors are always available and the tree always shows every macro, so
+// there is no longer a mode to be in: an EXISTING macro opens in the editor its
+// own format needs (isScriptMacroView), and a NEW one is a JS script, which is
+// the recommended format and the one the AI writes.
+//
+// This used to read config.showClassicMacros, set once at install time from
+// "is this an upgrade?". That made a new blank macro open as a command table
+// for every upgrading user — and with the Settings checkbox gone there was no
+// way back out of it. Kept as a named constant rather than inlined at the four
+// call sites, so the decision stays in one place if it ever changes again.
+export const isJsFirstMode = (_state: State): boolean => true
+
+
+// a JS script macro is recognized by its data, not by the .js name suffix:
+// the program lives in editing.script (Commands stays empty)
+export const isScriptMacroEditing = (state: State): boolean =>
+  typeof (state.editor.editing as any).script === 'string'
+
+// True when the JS script editor is the macro view to show / route to.
+// Sources of truth, in order: an explicit dev-mode switch to the JS view
+// (activeTab), then JS-first mode showing every script macro — and the empty
+// Untitled state — as JS. Table macros keep the table as fallback.
+// THE one answer to "does this macro get the JS editor?" — used by the sidebar
+// Macro tab, the IDE tab list and the IDE's own routing. It was three separate
+// rules before, and each of them was wrong at least once, in a different way:
+// one bailed before checking whether the macro was a script, one mounted the
+// script editor for command-table macros, and one honoured a tab selection
+// that is STICKY ACROSS MACROS and so showed the previous macro's script.
+//
+// Note what is deliberately NOT an input: editor.activeTab. A macro is a
+// script or it is not, and no tab click can change that. Letting the tab
+// decide is exactly what produced "select a table macro, still see JS". The
+// tab bar's job is to reflect this, which is why the views that do not apply
+// are disabled rather than clickable.
+export const isScriptMacroView = (state: State): boolean => {
+  // a JSON parse error pins the user to the source view until it is fixed
+  if (state.editor.editingSource.error) return false
+
+  // the macro IS a script
+  if (isScriptMacroEditing(state)) return true
+
+  // a brand new, never-saved, empty macro: the only case with a real choice,
+  // and jsFirst decides it
+  const editing = state.editor.editing
+  const src = editing.meta && editing.meta.src
+  const isEmptyUntitled = !src && (!editing.commands || editing.commands.length === 0)
+  return isJsFirstMode(state) && isEmptyUntitled
+}
+
+// kept as the old name for existing imports
+export const isScriptViewActive = isScriptMacroView
+
 export function hasUnsavedMacro (state: State): boolean {
   const { editor } = state
   const { editing, editingSource, activeTab } = editor
@@ -124,6 +154,9 @@ export function hasUnsavedMacro (state: State): boolean {
   if (!editing.meta.src && editing.meta.src!= null )  return true
 
   switch (activeTab) {
+    // script_view: script edits live in editing.script and are tracked by
+    // the same hasUnsaved meta flag as command edits
+    case 'script_view':
     case 'table_view': {
       const { hasUnsaved }: any = editing.meta || {}
       return hasUnsaved
@@ -275,6 +308,10 @@ export const getFilteredMacroFileNodeData = createSelector(
     (state: State) => state.macroQuery
   ],
   (macroFileNodeData: FileNodeData[], searchText: string): FileNodeData[] => {
+    // The tree shows EVERY macro. It used to hide the Classic demo folder in
+    // JS-first mode, which meant a user could own macros the tree denied —
+    // the worst kind of missing. Which EDITOR a macro opens in is decided per
+    // macro (isScriptMacroView), so the tree never has to take a position.
     const trimSearchText        = searchText.trim().toLowerCase()
     const filteredFileNodeData  = (() => {
       if (trimSearchText.length === 0) {

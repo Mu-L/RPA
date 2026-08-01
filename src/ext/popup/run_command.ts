@@ -749,10 +749,14 @@ function createCountDown(timeout: number): [() => void, () => void] {
 }
 
 function isChromeSpecialPage(url: string): boolean {
-  return url.startsWith('chrome://') || url.startsWith('chrome-error://')
+  return url.startsWith('chrome://') || url.startsWith('chrome-error://') || url.startsWith('edge://')
 }
 
 function waitForPageLoadComplete(tab: chrome.tabs.Tab): Promise<boolean> {
+  // Poll the tab's own load state instead of injecting a script: script
+  // injection is not possible while the tab is still on a chrome:// or
+  // chrome-error:// page, which made this wait spin until the page-load
+  // timeout (Error #230) when a macro started on e.g. chrome://extensions/
   return new Promise((resolve, reject) => {
     const timeout = 60 * 1000
     const interval = 300
@@ -761,28 +765,22 @@ function waitForPageLoadComplete(tab: chrome.tabs.Tab): Promise<boolean> {
       elapsed += interval
       if (elapsed > timeout) {
         clearInterval(timer)
-        reject(new Error('timeout'))
+        return reject(new Error('timeout'))
       }
 
-      Ext.scripting
-        .executeScript({
-          target: { tabId: tab.id },
-          func: () => {
-            return document.readyState
-          }
-        })
-        .then((result: any) => {
-          // wait for document ready
-          if (result && result[0].result === 'complete') {
+      Ext.tabs
+        .get(tab.id)
+        .then((t: chrome.tabs.Tab) => {
+          // done once the tab left the special page and finished loading
+          if (t && t.status === 'complete' && t.url && !isChromeSpecialPage(t.url)) {
             clearInterval(timer)
             resolve(true)
           }
         })
         .catch((e: any) => {
-          console.log('executeScript err:>> ', e)
-          if (timeout < elapsed) {
-            reject(new Error('E231: Page load error'))
-          }
+          // tab gone — no point in polling on
+          clearInterval(timer)
+          reject(new Error('E231: Page load error'))
         })
     }, interval)
   })
@@ -791,6 +789,18 @@ function waitForPageLoadComplete(tab: chrome.tabs.Tab): Promise<boolean> {
 function preparePlayTab(command: Command): Promise<boolean> {
   const [startPageLoadCountDown, stopPageLoadCountDown] = createCountDown(getTimeoutPageLoad(command))
   console.log('preparePlayTab:>> command:>>', command)
+
+  // `selectWindow tab=open` must NOT be prepared against the current play
+  // tab: the bg handler creates a brand new tab itself (and waits for its DOM
+  // there). Preparing here meant that whenever the current tab's content
+  // script did not answer PANEL_CS_IPC_READY within 100ms, the recovery path
+  // (openNewUrlInPlayTab) NAVIGATED the play tab to the URL and set
+  // shouldSkipCommandRun — so the real command never ran and no new tab was
+  // created. DemoTabs then ended with a single tab instead of three.
+  if (command.cmd === 'selectWindow' && /^\s*tab=open\s*$/i.test(command.target || '')) {
+    return Promise.resolve(false)
+  }
+
   return (
     getPlayTab()
       // Note: catch any error, and make it run 'getPlayTab(args.url)' instead
@@ -798,6 +808,12 @@ function preparePlayTab(command: Command): Promise<boolean> {
       .then((tab: chrome.tabs.Tab) => {
         // to check if the playTab window is closed
         const windowId = tab.windowId
+        // the getPlayTab fallback tab ({ id: -1 }) has no windowId; calling
+        // windows.get(undefined) throws "No matching signature" — skip the
+        // window-closed check and let the !tab.url branch below reopen the page
+        if (typeof windowId !== 'number' || windowId < 0) {
+          return tab
+        }
         // check if window is closed
         return Ext.windows.get(windowId, { populate: true }).then((win: any) => {
           // when window is closed, it will return a popup window
@@ -829,7 +845,9 @@ function preparePlayTab(command: Command): Promise<boolean> {
 
         // if tab.url starts with any of the nonresponsiveFirefoxURLs
         if (Ext.isFirefox() && nonresponsiveFirefoxURLs.some((url) => tab.url!.startsWith(url))) {
-          const openNewURLPromise = openNewUrlInPlayTab(command, startPageLoadCountDown).then(() => waitForPageLoadComplete(tab))
+          // must wait on the tab returned by openNewUrlInPlayTab — on a fresh first
+          // run `tab` is the { id: -1 } fallback and polling it throws E231
+          const openNewURLPromise = openNewUrlInPlayTab(command, startPageLoadCountDown).then((res) => waitForPageLoadComplete(res.tab))
           return Promise.race([openNewURLPromise, timeoutPromise.then(() => false)])
         }
 
@@ -838,7 +856,9 @@ function preparePlayTab(command: Command): Promise<boolean> {
         // and wait for it to be ready
         // in some uncertain cases url property in tab object is turned out not to be available
         if (!tab.url || isChromeSpecialPage(tab.url!)) {
-          const openNewURLPromise = openNewUrlInPlayTab(command, startPageLoadCountDown).then(() => waitForPageLoadComplete(tab))
+          // must wait on the tab returned by openNewUrlInPlayTab — on a fresh first
+          // run `tab` is the { id: -1 } fallback and polling it throws E231
+          const openNewURLPromise = openNewUrlInPlayTab(command, startPageLoadCountDown).then((res) => waitForPageLoadComplete(res.tab))
           return Promise.race([openNewURLPromise, timeoutPromise.then(() => false)])
         }
 

@@ -1,37 +1,92 @@
-import { Button } from 'antd'
+import { Button, Popover, message } from 'antd'
 import React from 'react'
 import { connect } from 'react-redux'
 import { bindActionCreators } from 'redux'
 import { SettingOutlined } from '@ant-design/icons'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faCirclePlay, faCirclePause, faPenToSquare, faCircleStop } from '@fortawesome/free-regular-svg-icons'
+// Deep-path imports keep webpack from bundling the whole icon set (tree-shaking
+// is disabled by the CommonJS babel transform in webpack.prod.config.js)
+import { faCirclePlay } from '@fortawesome/free-regular-svg-icons/faCirclePlay'
+import { faCirclePause } from '@fortawesome/free-regular-svg-icons/faCirclePause'
+import { faCircleStop } from '@fortawesome/free-regular-svg-icons/faCircleStop'
+import { faWindowRestore } from '@fortawesome/free-regular-svg-icons/faWindowRestore'
 
 import * as actions from '@/actions'
 import * as C from '@/common/constant'
 import { getStorageManager } from '@/services/storage'
-import Ext from '@/common/web_extension'
 import { getState, updateState } from '@/ext/common/global_state'
-import { getPlayTab, showPanelWindow, getActiveTabId } from '@/ext/common/tab'
+import { getPlayTab, openSettings, showPanelWindow } from '@/ext/common/tab'
 import { getPlayer, Player } from '@/common/player'
 import { Actions as simpleActions } from '@/actions/simple_actions'
 import { range, setIn, updateIn, compose, cn } from '@/common/utils'
+import { getActiveWebTab } from '@/common/tab_utils'
+import { goUivUrl } from '@/common/uiv_link'
+import { isScriptPaused, isScriptRunning, onScriptEvent, pauseScript, resumeScript, runScript, stopScript } from '@/modules/script_runner'
 import './controlbar.scss'
-import storage from '@/common/storage'
 import csIpc from '@/common/ipc/ipc_cs'
 
 class Controls extends React.Component {
   state = {
-    openIDEClicked: false,
+    // 'stopped' | 'running' | 'paused' — mirrors the JS script runner
+    scriptStatus: isScriptRunning() ? (isScriptPaused() ? 'paused' : 'running') : 'stopped'
   }
 
-  openRegisterSettings = (e) => {
-    if (e && e.preventDefault)  e.preventDefault()
-    this.props.updateUI({ showSettings: true, settingsTab: 'register' })
+  unsubscribeScript = null
+
+  // First interface switch: tell the user (once, on the surface they land on)
+  // that the default interface is configurable in Settings > General. The
+  // source button stores the destination; that surface shows the bubble until
+  // "Got it". Set from here and dev_toolbar (to IDE) and from the IDE's
+  // "Continue in Side Panel" button (to here).
+  onClickOpenIde = () => {
+    if (!this.props.config.interfaceHintDismissed) {
+      this.props.updateConfig({ interfaceHintTarget: 'ide' })
+    }
+    showPanelWindow({})
+  }
+
+  shouldShowInterfaceHint = () => {
+    return this.props.config.interfaceHintTarget === 'sidepanel' &&
+           !this.props.config.interfaceHintDismissed
+  }
+
+  dismissInterfaceHint = () => {
+    this.props.updateConfig({ interfaceHintDismissed: true, interfaceHintTarget: null })
   }
 
   componentDidMount () {
     const type = getStorageManager().getCurrentStrategyType()
     this.setState({ storageMode: type })
+    // the JS script runner lives outside redux — mirror its status so
+    // Play/Pause/Resume/Stop react to script runs too
+    this.unsubscribeScript = onScriptEvent('status', (status) => {
+      this.setState({ scriptStatus: status })
+    })
+  }
+
+  componentWillUnmount () {
+    if (this.unsubscribeScript) this.unsubscribeScript()
+  }
+
+  // JS script macro open (the program lives in editing.script) — the Play
+  // button runs the script through the interpreter instead of the player
+  isScriptMacro = () => {
+    return typeof this.props.editing.script === 'string'
+  }
+
+  playCurrentScript = () => {
+    if (this.state.scriptStatus !== 'stopped') return
+    const reportStartFailure = (e) => {
+      const msg = `Script failed to start: ${(e && e.message) || e}`
+      message.error(msg, 3)
+      try { this.props.addLog('error', msg) } catch (e2) { /* log unavailable */ }
+      console.error('JS script start failure', e)
+    }
+    try {
+      runScript(this.props.editing.script).catch(reportStartFailure)
+    } catch (e) {
+      reportStartFailure(e)
+    }
   }
 
   getTestCaseName = () => {
@@ -66,161 +121,145 @@ class Controls extends React.Component {
   }
 
   playCurrentMacro = async (isStep)  => {
+    if (this.isScriptMacro()) {
+      return this.playCurrentScript()
+    }
+
     const state = await getState()
     const bwindowId = state.tabIds.bwindowId;
     const wTab = bwindowId != '' ? await this.checkWindowisOpen(bwindowId) : '';
-    Ext.tabs.query({ active: true })
-    .then(tabs => {
-      if (tabs.length === 0) {
-        getPlayTab().then(tab => {
-          updateState(setIn(['tabIds', 'toPlay'], tab.id))
 
-          const { commands } = this.props.editing
-          const { src } = this.props.editing.meta
-          const openTc  = commands.find(tc => tc.cmd.toLowerCase() === 'open' || 'openbrowser')
-          this.setState({ lastOperation: 'play' })
-          this.props.playerPlay({
-          macroId: src && src.id,
-          title: this.getTestCaseName(),
-          extra: {
-          id: src && src.id
-          },
-          mode: getPlayer().C.MODE.STRAIGHT,
-          playUrl:tab.url,
-          playtabIndex:tab.index,
-          playtabId:tab.id,
-          startIndex: 0,
-          startUrl: openTc ? openTc.target : null,
-          resources: commands,
-          postDelay: this.props.config.playCommandInterval * 1000,
-          isStep: isStep
-          })
-            })
-      } else {
-        const tab = wTab != '' ? wTab : tabs[0];
-        updateState(setIn(['tabIds', 'toPlay'], tab.id))
-        const { commands } = this.props.editing
-        const { src } = this.props.editing.meta
-        const openTc  = commands.find(tc => tc.cmd.toLowerCase() === 'open' || 'openbrowser')
-        this.setState({ lastOperation: 'play' })
-        this.props.playerPlay({
-        macroId: src && src.id,
-        title: this.getTestCaseName(),
-        extra: {
+    // Target the focused window's active web tab. A bare query({active:true})
+    // returns one active tab per window in window order — with the IDE window
+    // or an unrelated window around, tabs[0] could be the wrong window's tab
+    // or an extension page, poisoning tabIds.toPlay for the whole run.
+    let tab = wTab != '' ? wTab : await getActiveWebTab()
+    if (!tab) {
+      tab = await getPlayTab().catch(() => null)
+    }
+    if (!tab) return
+
+    // seed the whole play-tab anchor set: firstPlay is the base for relative
+    // selectWindow tab=N locators — leaving it stale breaks tab switching
+    // (e.g. DemoTabs) when the user never clicked into the page beforehand
+    updateState(state => ({
+      ...state,
+      tabIds: {
+        ...state.tabIds,
+        lastPlay: state.tabIds.toPlay,
+        toPlay: tab.id,
+        firstPlay: tab.id
+      }
+    }))
+    const { commands } = this.props.editing
+    const { src } = this.props.editing.meta
+    const openTc  = commands.find(tc => tc.cmd.toLowerCase() === 'open' || 'openbrowser')
+    this.setState({ lastOperation: 'play' })
+    this.props.playerPlay({
+      macroId: src && src.id,
+      title: this.getTestCaseName(),
+      extra: {
         id: src && src.id
-        },
-        mode: getPlayer().C.MODE.STRAIGHT,
-        playUrl:tab.url,
-        playtabIndex:tab.index,
-        playtabId:tab.id,
-        startIndex: 0,
-        startUrl: openTc ? openTc.target : null,
-        resources: commands,
-        postDelay: this.props.config.playCommandInterval * 1000,
-        isStep: isStep
-        })
-      }
+      },
+      mode: getPlayer().C.MODE.STRAIGHT,
+      playUrl: tab.url,
+      playtabIndex: tab.index,
+      playtabId: tab.id,
+      startIndex: 0,
+      startUrl: openTc ? openTc.target : null,
+      resources: commands,
+      postDelay: this.props.config.playCommandInterval * 1000,
+      isStep: isStep
     })
-  }
-
-  onClickOpenIDE = async (showSettingsOnStart = false) => {
-
-    if(Ext.isFirefox()) {
-      const userResponse = confirm('To Open IDE, click OK and click the Extension icon in extension bar.')
-      if (!userResponse) return  
-
-      await this.props.updateConfig({ ["oneTimeShowSidePanel"]: false })
-      Ext.sidebarAction.close()
-      return
-    }
-
-    // for chrome and edge
-    const tabId = await getActiveTabId();
-    if (tabId) {
-      if (showSettingsOnStart) {
-        showPanelWindow({ showSettingsOnStart })
-      } else {
-        this.setState({ openIDEClicked: true })
-
-        // disable open sidepanel first
-        storage.get("config").then((config) => {
-          storage
-            .set("config", {
-              ...config,
-              disableOpenSidepanelBtnTemporarily: true,
-            })
-            .then(() =>
-              showPanelWindow().then(() =>
-                // re-enable open sidepanel after window shows
-                storage
-                  .get("config")
-                  .then((config) => {
-                    storage.set("config", {
-                      ...config,
-                      disableOpenSidepanelBtnTemporarily: false,
-                    })
-                  })
-                  .then(() =>
-                    // close sidepanel
-                    //  
-                    // issue: sidebarAction.close may only be called from a user input handler
-                    // Ext.sidebarAction.close()
-
-                    Ext.sidePanel
-                      .setOptions({
-                        enabled: false,
-                      })
-                      .then(() => {
-                        Ext.sidePanel.setOptions({
-                          enabled: true,
-                        })
-                      })
-                  )
-              )
-            )
-        })
-      }
-    }
   }
 
   render () {
     return (
         <div className="control-panel-container">
         <div className="control-panel">
+          {/* Rec + "Pop out editor" moved into the Macro tab itself
+              (macro/dev_toolbar.js) so this bar keeps a constant height and
+              the status bar doesn't jump between tabs / dev-mode states */}
           <div className='action-button-container'>
-            <Button disabled={this.props.player.status === C.PLAYER_STATUS.PLAYING || this.props.player.status === C.PLAYER_STATUS.PAUSED } onClick={() => this.playCurrentMacro(false)} >
+            <Button type="primary" disabled={this.state.scriptStatus !== 'stopped' || this.props.player.status === C.PLAYER_STATUS.PLAYING || this.props.player.status === C.PLAYER_STATUS.PAUSED || this.props.status === C.APP_STATUS.RECORDER } onClick={() => this.playCurrentMacro(false)} >
               <FontAwesomeIcon icon={faCirclePlay} />
-              <span> Play</span> 
+              <span> Play</span>
             </Button>
-            {this.props.player.status === C.PLAYER_STATUS.PAUSED ? (
-              <Button onClick={() => this.getPlayer().resume()}>
+            {this.state.scriptStatus === 'paused' || this.props.player.status === C.PLAYER_STATUS.PAUSED ? (
+              <Button
+                type="primary"
+                title="Resume"
+                onClick={() => {
+                  if (this.state.scriptStatus === 'paused') return resumeScript()
+                  this.getPlayer().resume()
+                }}
+              >
                 <FontAwesomeIcon icon={faCirclePlay} />
-                <span> Resume</span>              
+                <span> Resume</span>
               </Button>
             ) : (
-              <Button disabled={this.props.player.status !== C.PLAYER_STATUS.PLAYING} onClick={() => this.getPlayer().pause()}>
+              // scripts pause at the next line change (a bridge command that
+              // is mid-run finishes first)
+              <Button
+                className="icon-only"
+                title={this.state.scriptStatus === 'running' ? 'Pause at the next script line' : 'Pause'}
+                disabled={this.state.scriptStatus !== 'running' && this.props.player.status !== C.PLAYER_STATUS.PLAYING}
+                onClick={() => {
+                  if (this.state.scriptStatus === 'running') return pauseScript()
+                  this.getPlayer().pause()
+                }}
+              >
                 <FontAwesomeIcon icon={faCirclePause} />
-                <span> Pause</span>
               </Button>
             )}
-            <Button disabled={this.props.player.status === C.PLAYER_STATUS.STOPPED} onClick={() => this.getPlayer().stop()}>
+            <Button
+              className="icon-only"
+              title="Stop"
+              disabled={this.state.scriptStatus === 'stopped' && this.props.player.status === C.PLAYER_STATUS.STOPPED}
+              onClick={() => {
+                if (this.state.scriptStatus !== 'stopped') return stopScript()
+                this.getPlayer().stop()
+              }}
+            >
               <FontAwesomeIcon icon={faCircleStop} />
-              <span> Stop</span>
             </Button>
-          </div>
-          <div className='action-button-container'>
-            <Button disabled={this.props.player.status === C.PLAYER_STATUS.PLAYING || this.state.openIDEClicked} onClick={() => this.onClickOpenIDE()}>
-              <FontAwesomeIcon icon={faPenToSquare} />
-              <span> Open IDE</span>
-            </Button>
-            <Button disabled={this.props.player.status === C.PLAYER_STATUS.PLAYING} onClick={() => this.onClickOpenIDE(true)} shape="circle" >
+            <Popover
+              open={this.shouldShowInterfaceHint()}
+              placement="topLeft"
+              overlayClassName="interface-hint-popover"
+              content={
+                <div className="interface-hint">
+                  <p>
+                    Side Panel or IDE window — use whichever you like, your
+                    macros are the same in both. Pick which one opens by
+                    default in <strong>Settings &gt; General</strong>.
+                  </p>
+                  <Button size="small" type="primary" onClick={this.dismissInterfaceHint}>
+                    Got it
+                  </Button>
+                </div>
+              }
+            >
+              <Button className="icon-only" title="Open IDE window – same features as the sidebar, in a classic window layout" disabled={this.props.player.status === C.PLAYER_STATUS.PLAYING} onClick={this.onClickOpenIde}>
+                <FontAwesomeIcon icon={faWindowRestore} />
+              </Button>
+            </Popover>
+            <Button disabled={this.props.player.status === C.PLAYER_STATUS.PLAYING} title="Settings" onClick={() => openSettings()} shape="circle" >
               <SettingOutlined />
             </Button>
           </div>
           <div className='action-button-container'>
             <a onClick={() => {
-              chrome.tabs.create({url: "https://goto.ui.vision/x/idehelp?help=sidepanel"})
-            }}>Ui.Vision Side Panel</a>
+              chrome.tabs.create({url: goUivUrl("https://go.ui.vision/?help=home")})
+            }}>Ui.Vision</a>
+            {' - '}
+            <a onClick={() => {
+              chrome.tabs.create({url: goUivUrl("https://go.ui.vision/?help=forum")})
+            }}>Forum</a>
+            {' - '}
+            <a onClick={() => {
+              chrome.tabs.create({url: goUivUrl("https://go.ui.vision/?help=github")})
+            }}>Github</a>
           </div>
         </div>
       </div>

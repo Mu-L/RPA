@@ -33,14 +33,14 @@ const isSameDay = (a: Day, b: Day): boolean => {
           a.date === b.date
 }
 
-export const getOcrCommandCounter = singletonGetter((options: Required<CounterOptions>) => {
+export const getOcrCommandCounter = singletonGetter((options: CounterOptions) => {
   const read = (): Promise<number> => {
     // log('getOcrCommandCounter - read')
 
     return storage.get(STORAGE_KEY)
     .then((val: ValueType | null) => {
-      if (!val) return options.initial
-      if (!isSameDay(today(), val.day)) return options.initial
+      if (!val) return options.initial || 0
+      if (!isSameDay(today(), val.day)) return options.initial || 0
       return val.count
     })
   }

@@ -11,7 +11,7 @@ const joinUrl = (base, url) => {
 
 // HTML template from test case
 function genHtml ({ name, baseUrl, commandTrs, noImport }) {
-  const tableHtml = noImport ? '<h3>Starting Browser and UI.Vision...</h3>' : `
+  const tableHtml = noImport ? '<h3>Starting Browser and Ui.Vision...</h3>' : `
     <table cellpadding="1" cellspacing="1" border="1">
     <thead>
     <tr><td rowspan="1" colspan="3">${name}</td></tr>
@@ -157,7 +157,7 @@ export function toHtml ({ name, commands }) {
 
 export function generateEmptyHtml () {
   return genHtml({
-    name: 'UI.Vision Autostart Page',
+    name: 'Ui.Vision Autostart Page',
     commandTrs: [],
     baseUrl: '',
     noImport: true
@@ -230,8 +230,16 @@ export function fromJSONString (str, fileName, opts = {}) {
     throw new Error(`This is a test suite, not a macro`)
   }
 
+  // JS script macro (V11 prototype): the program lives in `Script`,
+  // Commands is an (often empty) array kept for envelope compatibility
+  const isScriptMacro = typeof obj.Script === 'string'
+
   if (!Array.isArray(obj.Commands)) {
-    throw new Error(`'Commands' field must be an array`)
+    if (isScriptMacro) {
+      obj.Commands = []
+    } else {
+      throw new Error(`'Commands' field must be an array`)
+    }
   }
 
   const commands  = obj.Commands.map(c => {
@@ -251,10 +259,51 @@ export function fromJSONString (str, fileName, opts = {}) {
 
   return {
     name,
-    data: { commands },
+    data: {
+      commands,
+      ...(isScriptMacro ? { script: obj.Script } : {})
+    },
     ...(opts.withStatus && obj.status ? { status: obj.status } : {}),
     ...(opts.withId && obj.id ? { id: obj.id } : {})
   }
+}
+
+// JS script macros in FILE storage are plain .js files: the file IS the
+// program and the file name IS the macro name (its .js suffix included —
+// same convention the macro tree shows). These two are the raw-text
+// counterparts of fromJSONString / toJSONString for that case.
+export function fromJsFileText (text, fileName) {
+  const s = String(text == null ? '' : text)
+
+  // a legacy file renamed by hand (<name>.js.json -> <name>.js) still carries
+  // the JSON envelope — unwrap it, so manual migration is just the rename and
+  // the next save writes the raw program. A real script that starts with '{'
+  // cannot also parse as JSON with a string Script field.
+  if (/^\s*\{/.test(s)) {
+    try {
+      const obj = JSON.parse(s)
+      if (obj && typeof obj.Script === 'string') {
+        return { name: fileName, data: { commands: [], script: obj.Script } }
+      }
+    } catch (e) { /* raw script text, keep as-is */ }
+  }
+
+  return {
+    name: fileName,
+    data: {
+      commands: [],
+      script: s
+    }
+  }
+}
+
+export function toJsFileText (obj) {
+  if (typeof obj.script !== 'string') {
+    throw new Error(
+      `'${obj.name}': only JS script macros are saved as .js files — a classic (command table) macro must not be named *.js`
+    )
+  }
+  return obj.script
 }
 
 // generate json from a test case
@@ -279,6 +328,8 @@ export function toJSONString (obj, opts = {}) {
         Description: c.description || ''
       }
     }),
+    // JS script macro (V11 prototype): round-trip the program
+    ...(typeof obj.script === 'string' ? { Script: obj.script } : {}),
     ...(opts.withStatus && obj.status ? { status: obj.status } : {}),
     ...(opts.withId && obj.id ? { id: obj.id } : {})
   }
@@ -330,7 +381,7 @@ export function generateMacroEntryHtml (macroRelativePath) {
   return `<!doctype html>
 <html lang="en">
   <head>
-    <title>UI.Vision Shortcut Page</title>
+    <title>Ui.Vision Shortcut Page</title>
   </head>
   <body>
     <h3>Command line:</h3>

@@ -7,7 +7,8 @@ const ClEANUP_TIMEOUT = 0
 export const withDebugger = (function () {
   const state = {
     connected: null,
-    cleanupTimer: null
+    cleanupTimer: null,
+    externalDetachListener: null
   }
 
   const setState = (obj) => {
@@ -23,8 +24,35 @@ export const withDebugger = (function () {
     return a && b && a.tabId && b.tabId && a.tabId === b.tabId
   }
 
-  return (debuggee, fn) => {
+  // The user can detach us externally (the "started debugging" infobar's Cancel
+  // button, or opening DevTools on the tab). Without clearing our state, the
+  // next call would assume it's still attached and fail on sendCommand.
+  const ensureExternalDetachListener = () => {
+    if (state.externalDetachListener) return
+
+    const listener = (source) => {
+      if (isSameDebuggee(state.connected, source)) {
+        cancelCleanup()
+        setState({ connected: null })
+      }
+    }
+    Ext.debugger.onDetach.addListener(listener)
+    setState({ externalDetachListener: listener })
+  }
+
+  return (debuggee, fn, options = {}) => {
+    const cleanupTimeout = options.cleanupTimeout || ClEANUP_TIMEOUT
+
     const attach = (debuggee) => {
+      // On Firefox the web_extension adapter leaves Ext.debugger as an empty
+      // stub (no chrome.debugger API), so fail with a clear message instead of
+      // crashing on Ext.debugger.onDetach.addListener below
+      if (typeof Ext.debugger.attach !== 'function') {
+        return Promise.reject(new Error('E331: This command needs the browser debugger API, which Firefox does not provide to extensions (Chrome/Edge only)'))
+      }
+
+      ensureExternalDetachListener()
+
       if (isSameDebuggee(state.connected, debuggee)) {
         cancelCleanup()
         return Promise.resolve()
@@ -48,7 +76,7 @@ export const withDebugger = (function () {
       }, e => console.error('error in detach', e.stack))
     }
     const scheduleDetach = () => {
-      const timer = setTimeout(() => detach(debuggee), ClEANUP_TIMEOUT)
+      const timer = setTimeout(() => detach(debuggee), cleanupTimeout)
       setState({ cleanupTimer: timer })
     }
     const sendCommand = (cmd, params) => {

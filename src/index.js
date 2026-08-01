@@ -3,7 +3,7 @@
 import React, { lazy } from 'react'
 import ReactDOM from 'react-dom'
 import { HashRouter } from 'react-router-dom'
-import { ConfigProvider, message, LocaleProvider } from 'antd'
+import { ConfigProvider, message } from 'antd'
 import en_US from "antd/lib/locale/en_US"
 import HTML5Backend from 'react-dnd-html5-backend'
 import { DndProvider } from 'react-dnd'
@@ -24,11 +24,11 @@ import { getXFile } from './services/xmodules/xfile'
 import { getXLocal } from './services/xmodules/xlocal'
 import { runDownloadLog } from './services/ocr'
 import { commandWithoutBaseUrl } from './models/test_case_model'
-import { normalizeTestSuite } from './models/test_suite_model'
 import storage from './common/storage'
 import { delay, randomName, dataURItoBlob, getPageDpi, parseQuery } from './common/utils'
 import { parseBoolLike, flow, until, guardVoidPromise } from './common/ts_utils'
 import { fromJSONString, fromHtml } from './common/convert_utils'
+import { runScript } from './modules/script_runner'
 import * as C from './common/constant'
 import log from './common/log'
 import { renderLog } from './common/macro_log'
@@ -37,7 +37,6 @@ import { Player, getPlayer } from './common/player'
 import getSaveTestCase from './components/save_test_case'
 import { ocrLanguageOptions } from './services/ocr/languages'
 import {
-  setTestSuites,
   setEditing,
   setTimeoutStatus,
   updateConfig,
@@ -55,15 +54,15 @@ import {
   setVariables,
   updateUI,
   resetEditingIfNeeded,
-  preinstall,
+  installWelcomeMacro,
   setMacrosExtra,
-  setTestSuitesExtra,
   findSameNameMacro,
-  findSameNameTestSuite,
   renameVisionImage,
   updateProxy,
-  insertCommand
+  insertCommand,
+  updateEditingScript
 } from './actions'
+import { recordedCommandToJs } from './common/recorded_command_to_js'
 import { getDownloadMan } from './common/download_man'
 import { getMacroExtraKeyValueData } from './services/kv_data/macro_extra_data'
 import { getMigrateMacroTestSuiteToBrowserFileSystem } from './services/migration/jobs/2019_04_01_macro_suite_storage'
@@ -71,7 +70,7 @@ import { getKantuMigrationService } from './services/migration'
 import { MigrationJobType } from './services/migration/types'
 import { Actions } from './actions/simple_actions'
 import { getLogService } from './services/log';
-import { getMacroFileNodeList, findMacroNodeWithCaseInsensitiveRelativePath, findMacroFolderWithCaseInsensitiveRelativePath, getShouldLoadResources, editorCommandCount, getIndexToInsertRecorded } from './recomputed'
+import { getMacroFileNodeList, findMacroNodeWithCaseInsensitiveRelativePath, findMacroFolderWithCaseInsensitiveRelativePath, getShouldLoadResources, editorCommandCount, getIndexToInsertRecorded, isScriptViewActive } from './recomputed'
 import { RunBy } from './reducers/state'
 import { getLicenseService } from './services/license'
 import { handleDelegatedBrowserFileSystemAPI } from './services/storage/common/filesystem_delegate/delegate'
@@ -83,15 +82,32 @@ import { checkIfSidePanelOpen } from './ext/common/sidepanel'
 import interceptLog from './common/intercept_log'
 import { createRoot } from 'react-dom/client'
 import { isSidePanelWindow } from './common/utils'
+import { installGoUivLinkDecorator } from './common/uiv_link'
 
 const App = lazy(() => import('./app'));
 const SidepanelApp = lazy(() => import('./sidepanel_app'));
 
 interceptLog()
 
+// tag help links with gui=sidebar|ide + version — usage stats on go.ui.vision
+// tell us which interface users actually prefer
+installGoUivLinkDecorator()
+
 polyfillTimeoutFunctions(csIpc)
 
 handleDelegatedBrowserFileSystemAPI()
+
+// TEST-ONLY (js-macro-test1): handle jsdev hooks BEFORE any panel IPC —
+// a second "panel" page (sidepanel.html opened as a tab for testing) can
+// hang in the IPC handshake below, so the reload hook must not wait for it.
+// The early title stamp distinguishes "page loaded" from "init completed".
+if (isSidePanelWindow() && /[?&]jsdev_/.test(window.location.search)) {
+  document.title = 'JSDEV|page-loaded'
+  if (/[?&]jsdev_reload=1/.test(window.location.search)) {
+    document.title = 'JSDEV|reloading'
+    setTimeout(() => Ext.runtime.reload(), 100)
+  }
+}
 
 let DefaultStorageMode =  StorageStrategyType.Browser
 
@@ -102,7 +118,10 @@ let DefaultStorageMode =  StorageStrategyType.Browser
 // )
 
 const captureScreenshotService = new CaptureScreenshotService({
-  captureVisibleTab: (windowId, options) => csIpc.ask('PANEL_CAPTURE_VISIBLE_TAB', { windowId, options })
+  captureVisibleTab: (windowId, options) => csIpc.ask('PANEL_CAPTURE_VISIBLE_TAB', { windowId, options }),
+  onThrottleWait: (waitMs) => {
+    store.dispatch(addLog('warning', `W370: Screenshot rate limit reached — waited ${waitMs}ms for the next screenshot slot (Chrome allows ~2 captures/sec). Visual/OCR steps in tight loops are slowed down by this; consider adding a pause between them.`))
+  }
 })
 
 // FIXME: better not passing store via `window` object
@@ -112,9 +131,21 @@ window['store'] = store
 
 const container = document.getElementById('root');
 const root = createRoot(container); // createRoot(container!) if you use TypeScript
+
+// Fresher look for the side panel via antd v5 design tokens (rounded corners,
+// softer borders). Scoped to the side panel window so the IDE keeps its look.
+const sidePanelTheme = {
+  token: {
+    borderRadius: 8,
+    controlHeight: 30,
+    colorBorder: '#d9dde3',
+    colorPrimary: '#1a6ce0'
+  }
+}
+
 const render = () => root.render(
   <DndProvider backend={HTML5Backend}>
-    <ConfigProvider locale={en_US}>
+    <ConfigProvider locale={en_US} theme={isSidePanelWindow() ? sidePanelTheme : undefined}>
       <Provider store={store}>
         <HashRouter>
           { isSidePanelWindow() ? <SidepanelApp/> : <App /> }
@@ -132,7 +163,6 @@ const DURATION        = 2000
 const bindMacroAndTestSuites = () => {
   const curStorageMode  = getStorageManager().getCurrentStrategyType()
   const macroStorage    = getStorageManager().getMacroStorage()
-  const suiteStorage    = getStorageManager().getTestSuiteStorage()
   const onError         = (errorList) => {
     errorList
     .filter(item => item.fileName !== '__Untitled__')
@@ -222,24 +252,41 @@ const restoreEditing = () => {
 const restoreConfig = () => {
   return storage.get('config')
     .then(config => {
+      // Note: an existing install has a previously persisted config; a fresh install has none.
+      // Used to give new installs sidebar-first defaults without changing existing setups.
+      const isExistingInstall = !!(config && Object.keys(config).length > 0)
+
       const cfg = {
-        showSidePanel: false,
+        // Note: side panel is the default entry point for new installs (sidebar-first UI).
+        // Existing installs keep whatever value is already stored in config.
+        showSidePanel: true,
+        // The JS editor is always available; the only switch is whether the
+        // classic command table is shown too (Settings > General). EXISTING
+        // installs get it, because someone who upgrades and cannot find their
+        // table macros will reasonably assume the upgrade ate them. New
+        // installs get JS only.
+        showClassicMacros: isExistingInstall,
+        // false until the one-time "which editor(s)?" dialog has been answered
+        // (macro_setup_dialog.js). Upgrading users need to be TOLD their
+        // macros are still there; new users get the recommendation.
+        macroSetupDone: false,
         useDarkTheme: false,
         sidePanelOnLeft: false,
         anthropicAPIKey: '',
         aiComputerUseMaxLoops: 50,
-        useInitialPromptInAiChat: true,
-        aiChatSidebarPrompt: 'Describe what you see, in 10 words or less.',
-        showSettingsOnStart: false,
+        // custom system prompt for the sidebar AI chat (macro assistant);
+        // empty = use the built-in default from macro_agent/service.ts
+        aiMacroAgentSystemPrompt: '',
         showSidebar: false,
         showBottomArea: true,
         playScrollElementsIntoView: true,
         playHighlightElements: true,
-        playCommandInterval: 0.3,
+        // command interval: fast (no delay) is the default since the 2026-07
+        // settings cleanup; the setting itself moved to Settings > Advanced
+        playCommandInterval: 0,
         // selenium related
         saveAlternativeLocators: true,
         recordNotification: true,
-        recordClickType: 'click',
         showTestCaseTab: true,
         logFilter: 'All',
         onErrorInLoop: 'continue_next_loop',
@@ -257,7 +304,6 @@ const restoreConfig = () => {
         enableAutoBackup: true,
         autoBackupInterval: 7,
         autoBackupTestCases: true,
-        autoBackupTestSuites: true,
         autoBackupScreenshots: true,
         autoBackupCSVFiles: true,
         autoBackupVisionImages: true,
@@ -278,8 +324,6 @@ const restoreConfig = () => {
         ocrMode: 'enabled', // 'disabled',
         ocrLanguage: 'eng',
         ocrLanguageOption: ocrLanguageOptions,
-        ocrOfflineURL: '',
-        ocrOfflineAPIKey: '',
         // vision related
         cvScope: 'browser',
         defaultVisionSearchConfidence: 0.6,
@@ -292,6 +336,17 @@ const restoreConfig = () => {
         turnOffProxyAfterReplay: true,
         ...config,
       }
+
+      // Migration from the single jsFirstMode checkbox to the pair above.
+      // Anyone who had explicitly turned JS-first OFF wanted the classic views,
+      // so honour that; ON meant JS only. Runs once — jsFirstMode is dropped
+      // afterwards so this cannot re-apply over a later choice.
+      if (config && config.jsFirstMode !== undefined) {
+        cfg.showClassicMacros = config.jsFirstMode === false
+        delete cfg.jsFirstMode
+      }
+
+
       store.dispatch(updateConfig(cfg))
       return cfg
     })
@@ -404,8 +459,10 @@ const genPlayerPlayCallback = ({ options,installed}) => {
       .then(() => csIpc.ask('PANEL_CLOSE_ALL_WINDOWS', {}))
     }
 
-    // Note: it's better to keep kantu open if it's opened manually before
-    if (!err && reason === Player.C.END_REASON.COMPLETE && closeRPA && !closeBrowser) {
+    // Note: it's better to keep kantu open if it's opened manually before.
+    // closeRPA only ever closes the IDE window — the side panel is a
+    // persistent surface and stays open even for bookmark runs (closeRPA=1)
+    if (!err && reason === Player.C.END_REASON.COMPLETE && closeRPA && !closeBrowser && !isSidePanelWindow()) {
       // Close kantu panel
       setTimeout(() => {
         window.close()
@@ -426,12 +483,7 @@ const genOverrideScope = ({ options }) => {
   }, {})
 }
 
-const validParams = [
-  'direct', 'closeBrowser', 'closeKantu', 'closeRPA', 'continueInLastUsedTab', 'nodisplay',
-  'folder', 'savelog', 'storage', 'macro', 'testsuite', 'storageMode', 'loadmacrotree',
-  'cmd_var1', 'cmd_var2', 'cmd_var3', 'cmd_var4', 'cmd_var5', 'cmd_var6',
-  'cmd_var7', 'cmd_var8', 'cmd_var9', 'cmd_var10'
-]
+const validParams = C.INVOKE_URL_PARAMS
 
 const fuzzyObj = new FuzzySet(validParams)
 
@@ -531,14 +583,20 @@ const bindIpcEvent = () => {
         return true
       }
 
-      case 'OPEN_SETTINGS':
-        store.dispatch(
-          updateUI({ showSettings: true })
-        )
-        return true
-
       case 'INSPECT_RESULT':
         store.dispatch(doneInspecting())
+        // JS script view open (explicitly via dev mode, or through JS-first
+        // routing): route the picked locator to the script editor (inserted
+        // at the cursor) instead of the edit form's Target field
+        if (isScriptViewActive(store.getState())) {
+          store.dispatch(updateUI({
+            scriptPickedLocator: {
+              target: args.locatorInfo.target,
+              at: Date.now()
+            }
+          }))
+          return true
+        }
         store.dispatch(updateSelectedCommand({
           target: args.locatorInfo.target,
           targetOptions: args.locatorInfo.targetOptions
@@ -556,6 +614,18 @@ const bindIpcEvent = () => {
 
         if (shouldSkip) {
           return false
+        }
+
+        // JS editor open: the recorded action lands as a uiv.* line appended
+        // to the open script (the editor mirrors editing.script live) —
+        // recording never touches the command table in this mode
+        if (isScriptViewActive(state)) {
+          const script = typeof state.editor.editing.script === 'string'
+            ? state.editor.editing.script
+            : ''
+          const sep = script.length === 0 || /\n$/.test(script) ? '' : '\n'
+          store.dispatch(updateEditingScript(script + sep + recordedCommandToJs(args) + '\n'))
+          return true
         }
 
         if (recordIndex > 0 && recordIndex <= commandCount) {
@@ -668,6 +738,31 @@ const bindIpcEvent = () => {
           .then(tc => {
             getXLocal().getVersionLocal().then(data => {
             const { installed, version } = data
+
+            // JS script macros carry their program in `script` and an empty
+            // command table — the player would "play" that empty table and
+            // report success after 0.00s. Route them to the script runner,
+            // the same path as the editor's Run button. closeRPA / savelog /
+            // closeBrowser reuse the player callback; cmd_varN reach the
+            // script via seedVars, set after the runner's variable reset.
+            if (tc.data && typeof tc.data.script === 'string' && tc.data.script.trim()) {
+              prepareBeforeRun(options)
+
+              const callback = genPlayerPlayCallback({ options, installed, version })
+
+              store.dispatch(editTestCase(tc.id))
+              checkIfSidePanelOpen().then(() => {
+                store.dispatch(updateUI({ sidebarTab: 'Macro' }))
+              })
+
+              return runScript(tc.data.script, { seedVars: genOverrideScope({ options }) })
+              .then(({ ok, error }) => {
+                if (ok) return callback(null, Player.C.END_REASON.COMPLETE)
+                if (error === 'Script stopped') return callback(new Error(error), Player.C.END_REASON.MANUAL)
+                return callback(new Error(error || 'Script failed'))
+              }, callback)
+            }
+
             const openTc  = tc.data.commands.find(item => item.cmd.toLowerCase() === 'open')
 
             prepareBeforeRun(options)
@@ -787,54 +882,10 @@ const bindIpcEvent = () => {
           }
 
           if (testSuite.name && testSuite.name.length > 0) {
-            const pTestSuite = (() => {
-              if (shouldLoadResources) {
-                return until('testSuites ready', () => {
-                  const state = store.getState()
-                  const { testSuites } = state.editor
-
-                  return {
-                    pass:   testSuites && testSuites.length > 0,
-                    result: true
-                  }
-                })
-                .then(() => {
-                  const state = store.getState()
-                  return findSameNameTestSuite(testSuite.name, state.editor.testSuites)
-                })
-              }
-
-              return storageMan.getTestSuiteStorage().read(testSuite.name, 'Text')
-            })()
-
-            return pTestSuite.then((ts) => {
-              if (!ts) {
-                message.error(`no macro found with name '${testSuite.name}'`)
-                return false
-              }
-
-              prepareBeforeRun(options)
-
-              getPlayer({ name: 'testSuite' }).play({
-                title: ts.name,
-                extra: {
-                  id: ts.id,
-                  name: ts.name
-                },
-                mode: getPlayer().C.MODE.STRAIGHT,
-                startIndex: 0,
-                resources: ts.cases.map(item => ({
-                  id:     item.testCaseId,
-                  loops:  item.loops
-                })),
-                public: {
-                  scope: genOverrideScope({ options })
-                },
-                callback: genPlayerPlayCallback({ options })
-              })
-
-              return store.dispatch(updateUI({ sidebarTab: 'test_suites' }))
-            })
+            // Note: saved test suites were removed; only folder-based
+            // test suites (folder=... in the command line) are supported
+            message.error(`Test suites are no longer supported. Use folder=... to play all macros in a folder.`)
+            return false
           }
         })
         .catch(e => {
@@ -1101,29 +1152,30 @@ const updatePageTitle = (args) => {
   document.title = `${origTitle} - (Tab: ${args.title})`
 }
 
+// The demo/QA macro sets are NOT auto-installed anymore: a fresh install
+// starts with just THREE macros — the welcome tour "A short welcome tour.js",
+// "Like Ui.Vision？Give us a star 🌟.js" and "Draw a cat🐱.js", all at the
+// tree root. The full sets
+// arrive on demand via Settings > General >
+// "For Tech Support/QA" > Restore Demo Macros (those buttons also install
+// the demo csv/vision resources). The version marker is still written, so
+// installs that predate this keep their upgrade history consistent and the
+// welcome macro is written only once, not on every startup.
 function tryPreinstall () {
   return storage.get('preinstall_info')
   .then(info => {
-    const status = (() => {
-      if (!info)  return 'fresh'
+    const askedVersions = (info && info.askedVersions) || []
+    const thisVersion = globalConfig.preinstall.version
+    if (askedVersions.indexOf(thisVersion) !== -1) return false
 
-      const { askedVersions = [] } = info
-      if (askedVersions.indexOf(globalConfig.preinstall.version) === -1) return 'new_version_available'
+    const installOnFresh = !info
+      ? store.dispatch(installWelcomeMacro()).catch(e => log.warn(`welcome macro install failed: ${e && e.message}`))
+      : Promise.resolve()
 
-      return 'up_to_date'
-    })()
-
-    switch (status) {
-      case 'fresh':
-        return store.dispatch(preinstall())
-
-      case 'new_version_available':
-        return store.dispatch(updateUI({ newPreinstallVersion: true }))
-
-      case 'up_to_date':
-      default:
-        return false
-    }
+    return installOnFresh.then(() => storage.set('preinstall_info', {
+      ...(info || {}),
+      askedVersions: [...askedVersions, thisVersion]
+    }))
   })
 }
 
@@ -1212,12 +1264,6 @@ function initFromQuery () {
   const queries = parseQuery(window.location.search)
 
   store.dispatch(Actions.setFrom(queries.from || RunBy.Manual))
-
-  if (queries.settings) {
-    store.dispatch(updateUI({
-      showSettings: true
-    }))
-  }
 }
 
 function initProxyState () {
@@ -1265,7 +1311,15 @@ function init () {
     if (config && config.useDarkTheme) {
       document.documentElement.setAttribute('data-theme', 'dark')
     }
-    render(config)    
+    render(config)
+
+    // TEST-ONLY (js-macro-test1): URL-param hooks so automation can reload
+    // the extension and smoke-test the JS script runner — see script_dev_hooks
+    if (isSidePanelWindow()) {
+      import('./modules/script_dev_hooks')
+        .then(m => m.initScriptDevHooks())
+        .catch(() => { /* dev hooks are best-effort */ })
+    }
   })
 }
 
@@ -1276,24 +1330,11 @@ Promise.all([
 ])
 .then(([config, xFileConfig]) => {
   // Note: This is the first call of getStorageManager
-  // and it must passed in `getMacros` to make test suite work
   getStorageManager(config.storageMode, {
     getConfig: () => store.getState().config,
-    getMacros: () => getMacroFileNodeList(store.getState()),
-    getMaxMacroCount: (strategyType) => {
-      const count = (() => {
-        switch (strategyType) {
-          case StorageStrategyType.XFile:
-            return getLicenseService().getMaxXFileMacros()
-
-          case StorageStrategyType.Browser:
-          default:
-            return Infinity
-        }
-      })()
-
-      return Promise.resolve(count)
-    }
+    // no macro/folder cap on any storage strategy (the XFile licence limit
+    // was retired 2026-07-26)
+    getMaxMacroCount: () => Promise.resolve(Infinity)
   })
 
   init()

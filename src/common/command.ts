@@ -52,7 +52,7 @@ export const commandScopes = {
     'verifyElementNotPresent': CommandScope.WebOnly,
     'verifyEditable': CommandScope.WebOnly,
     'verifyNotEditable': CommandScope.WebOnly,
-    'deleteAllCookies': CommandScope.WebOnly,
+    'deleteCookies': CommandScope.WebOnly,
     'label': CommandScope.All,
     'gotoLabel': CommandScope.All,
     'csvRead': CommandScope.All,
@@ -88,6 +88,10 @@ export const commandScopes = {
     'bringIDEandBrowserToBackground': CommandScope.All,
     'setWindowSize': CommandScope.All,
     'prompt': CommandScope.WebOnly,
+
+    // NOTE: the B commands (BClick/BMove/BType/...) are NOT table commands.
+    // Trusted CDP input is a JS-script-only feature (uiv.browser.*); the
+    // B-command engine in run_command.ts is internal plumbing behind it.
 
     'XRun': CommandScope.All,
     'XRunAndWait': CommandScope.All,
@@ -155,9 +159,79 @@ export const availableCommands = (() => {
 
 export const availableCommandsForDesktop = availableCommands.filter(isCommandAvailableForDesktop)
 
+// Deprecated command names and their modern replacements. Single source of
+// truth shared by the editor display (commandText) and the AI macro agent
+// (system prompt + macro validation) — extend this list when a command gets
+// retired. Matching is case-insensitive.
+export const DEPRECATED_COMMANDS: Array<{ cmd: string; replacement: string }> = [
+  { cmd: 'endWhile', replacement: 'end' },
+  { cmd: 'endIf', replacement: 'end' },
+  { cmd: 'endTimes', replacement: 'end' },
+  { cmd: 'if_v2', replacement: 'if' },
+  { cmd: 'while_v2', replacement: 'while' },
+  { cmd: 'gotoIf_v2', replacement: 'gotoIf' },
+  { cmd: 'storeEval', replacement: 'executeScript_Sandbox' },
+  { cmd: 'resize', replacement: 'setWindowSize' },
+  // 2026-07: visual search + click on #elementFromPoint(${!imageX}, ${!imageY})
+  // (shorthand: #efp) replaces coordinate clicking
+  { cmd: 'clickAt', replacement: 'click with an #efp / #elementFromPoint target' },
+  // 2026-07 agentic cleanup: the *AndWait aliases share the exact code path with
+  // their base commands (page-load waiting is automatic), the verify* family is
+  // soft-fail assert (use assert* + !errorignore instead), and the editability
+  // checks have near-zero real-world use
+  { cmd: 'clickAndWait', replacement: 'click' },
+  { cmd: 'selectAndWait', replacement: 'select' },
+  { cmd: 'waitForPageToLoad', replacement: 'waitForElementVisible if needed — page-load waiting is automatic' },
+  { cmd: 'visionFind', replacement: 'visualSearch' },
+  { cmd: 'visualVerify', replacement: 'visualAssert' },
+  { cmd: 'verify', replacement: 'assert' },
+  { cmd: 'verifyText', replacement: 'assertText' },
+  { cmd: 'verifyTitle', replacement: 'assertTitle' },
+  { cmd: 'verifyValue', replacement: 'assertValue' },
+  { cmd: 'verifyChecked', replacement: 'assertChecked' },
+  { cmd: 'verifyNotChecked', replacement: 'assertNotChecked' },
+  { cmd: 'verifyElementPresent', replacement: 'assertElementPresent' },
+  { cmd: 'verifyElementNotPresent', replacement: 'assertElementNotPresent' },
+  { cmd: 'verifyEditable', replacement: 'an executeScript check on disabled/readOnly' },
+  { cmd: 'verifyNotEditable', replacement: 'an executeScript check on disabled/readOnly' },
+  { cmd: 'assertEditable', replacement: 'an executeScript check on disabled/readOnly' },
+  { cmd: 'assertNotEditable', replacement: 'an executeScript check on disabled/readOnly' },
+  // synthetic DOM drag events are ignored by most modern sites; trusted CDP
+  // dragging lives in JS scripts (press, move, release)
+  { cmd: 'dragAndDropToObject', replacement: 'a JS script: uiv.browser.down(start), then uiv.browser.up(end)' }
+]
+
+export function getDeprecatedCommandReplacement (cmd: string): string | null {
+  if (!cmd) return null
+  const lower = cmd.toLowerCase()
+  const found = DEPRECATED_COMMANDS.find(item => item.cmd.toLowerCase() === lower)
+  return found ? found.replacement : null
+}
+
+// Commands offered in the editor's command dropdown: everything except the
+// deprecated ones. Deprecated commands stay fully valid — existing macros
+// load, display (flagged _deprecated) and play — they are only hidden from
+// new-macro authoring.
+export const selectableCommands = availableCommands.filter(cmd => !getDeprecatedCommandReplacement(cmd))
+export const selectableCommandsForDesktop = selectableCommands.filter(isCommandAvailableForDesktop)
+
+// Renamed commands: old name -> new canonical name, accepted SILENTLY when a
+// macro is loaded (unlike DEPRECATED_COMMANDS, which the editor flags and the
+// AI agent rejects). Keys must be lowercase.
+const RENAMED_COMMANDS: { [key: string]: string } = {
+  // 2026-07: it only ever deleted the current site's cookies, so the "All"
+  // in the name was misleading
+  'deleteallcookies': 'deleteCookies'
+}
+
 export function normalizeCommandName (str: string) {
   if (!str) {
     return '';
+  }
+
+  const renamed = RENAMED_COMMANDS[str.toLowerCase()]
+  if (renamed) {
+    return renamed
   }
 
   const lower = str.toLowerCase()
@@ -174,14 +248,10 @@ export function commandText (cmd: string) {
     case 'gotoIfxxx':
       return cmd + '_v1_deprecated'
 
-    case 'storeEval':
-    case 'endif':
-    case 'endwhile':
-    case 'resize':
-      return cmd + '_deprecated'
-
     default:
-      return cmd
+      // single source of truth: everything in DEPRECATED_COMMANDS gets the
+      // _deprecated suffix in the editor display
+      return getDeprecatedCommandReplacement(cmd) ? cmd + '_deprecated' : cmd
   }
 }
 
@@ -322,7 +392,7 @@ export function canCommandFind (str: string): boolean {
     case 'captureScreenshot':
     case 'captureDesktopScreenshot':
     case 'refresh':
-    case 'deleteAllCookies':
+    case 'deleteCookies':
     case 'label':
     case 'gotoLabel':
     case 'csvRead':

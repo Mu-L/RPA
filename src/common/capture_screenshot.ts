@@ -3,7 +3,6 @@
 import Ext from './web_extension'
 import { Size, Point, Rect } from './types'
 import { delay, dataURItoBlob } from './utils'
-import { throttlePromiseFunc } from './ts_utils'
 import { IStandardStorage } from '@/services/storage/std/standard_storage'
 import { IWithLinkStorage } from '@/services/storage/flat/storage'
 
@@ -52,8 +51,20 @@ function pCompose (list: Array<(arg: any) => Promise<any>>) {
 
 type CaptureVisibleTabFunc = (windowId?: number | null, options?: chrome.tabs.CaptureVisibleTabOptions) => Promise<string>
 
+// Chrome enforces ~2 captureVisibleTab calls/sec PER EXTENSION, so the
+// throttle slots must be shared by ALL service instances. Several are created
+// across the app (index.js, run_command.ts, and helper.ts even builds one per
+// capture call) — with instance-local state each of them started with a fresh
+// budget and parallel/back-to-back captures burst past the quota
+// (MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND errors, e.g. in DemoTakeScreenshots).
+let sharedNextSlotAt = 0
+let sharedLastWarnAt = 0
+
 export type CaptureScreenshotServiceParams = {
   captureVisibleTab: CaptureVisibleTabFunc
+  // Called (rate-limited to once per 5s) when Chrome's captureVisibleTab
+  // rate limit forces a capture to wait, so callers can warn the user
+  onThrottleWait?: (waitMs: number) => void
 }
 
 export class CaptureScreenshotService {
@@ -61,13 +72,30 @@ export class CaptureScreenshotService {
 
   constructor (private params: CaptureScreenshotServiceParams) {
     // default value to be 2
-    const MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND = 
+    const MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND =
     typeof chrome !== 'undefined' &&
     typeof chrome.tabs !== 'undefined' &&
     typeof (chrome.tabs as any).MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND === 'number'
       ?  (chrome.tabs as any).MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND : 2
 
-    this.captureVisibleTab = throttlePromiseFunc(this.params.captureVisibleTab, MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND * 1000 + 100)
+    // Chrome allows MAX calls per second, so space capture starts 1000/MAX ms
+    // apart (+100ms safety margin). Note: this used to be MAX * 1000 + 100
+    // (2.1s between captures) which over-throttled vision retry loops ~4x.
+    const interval = Math.ceil(1000 / MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND) + 100
+
+    this.captureVisibleTab = (windowId, options) => {
+      const now = Date.now()
+      const waitMs = Math.max(0, sharedNextSlotAt - now)
+      sharedNextSlotAt = now + waitMs + interval
+
+      if (waitMs > 200 && this.params.onThrottleWait && now - sharedLastWarnAt > 5000) {
+        sharedLastWarnAt = now
+        try { this.params.onThrottleWait(waitMs) } catch (e) { /* logging must never break capture */ }
+      }
+
+      const pWait = waitMs > 0 ? delay(() => {}, waitMs) : Promise.resolve()
+      return pWait.then(() => this.params.captureVisibleTab(windowId, options))
+    }
   }
 
   saveScreen (screenshotStorage: IStandardStorage & IWithLinkStorage, tabId: number, fileName: string, devicePixelRatio: number): Promise<{ url: string; fileName: string }> {

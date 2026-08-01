@@ -1,0 +1,187 @@
+﻿import { Button, message, Modal } from 'antd'
+import React from 'react'
+import { connect } from 'react-redux'
+import { bindActionCreators } from 'redux'
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
+import { faCircleDot } from '@fortawesome/free-regular-svg-icons/faCircleDot'
+
+import * as actions from '@/actions'
+import { Actions as simpleActions } from '@/actions/simple_actions'
+import * as C from '@/common/constant'
+import { isCVTypeForDesktop } from '@/common/cv_utils'
+import Ext from '@/common/web_extension'
+import { getPlayTab } from '@/ext/common/tab'
+import { goUivUrl } from '@/common/uiv_link'
+import getSaveTestCase from '@/components/save_test_case'
+import { isScriptMacroView } from '@/recomputed'
+
+// sidebar recordings are stored in this scratch macro, never in the macro the
+// user happens to have open
+const RECORD_SCRATCH_MACRO = '#current'
+
+// Rec, docked at the bottom of the Macro tab (dev mode
+// only). Living inside the tab â€” instead of in the shared bottom control
+// bar â€” keeps the status bar and play controls at a constant height when
+// tabs change or dev mode toggles. Logic moved from controlbar/index.js.
+class DevToolbar extends React.Component {
+  state = {
+  }
+
+  getCurrentRecordedtab = async () => {
+    return new Promise((resolve) => {
+      Ext.tabs.query({ active: true }).then((tabs) => {
+        if (tabs.length != 0) {
+          getPlayTab().then((tab) => {
+            resolve(tab)
+          })
+        } else {
+          resolve(false)
+        }
+      })
+    })
+  }
+
+  // firefox requires explicit permission to access all urls
+  // ask user to grant permission, return promise (same logic as IDE header)
+  askPermission = () => {
+    return new Promise((resolve) => {
+      if (Ext.isFirefox()) {
+        Ext.permissions.contains({ origins: ['<all_urls>'] }).then(
+          (permissionGranted) => {
+            if (!permissionGranted) {
+              Modal.confirm({
+                title: 'Grant Permission To Replay Macros',
+                content: `Ui.Vision is an open-source tool for automating tasks. To replay macros, it requires permission from Firefox to 'access data in all tabs'. If you click 'OK', Ui.Vision will open the Firefox permission dialog, allowing you to provide this permission. Continue?`,
+                okText: 'Continue',
+                cancelText: 'Cancel',
+                onOk: () => {
+                  Ext.permissions.request({ origins: ['<all_urls>'] }).then((result) => {
+                    if (result) {
+                      resolve(true)
+                    } else {
+                      Ext.tabs.create({
+                        url: goUivUrl('https://go.ui.vision/?help=firefox_access_data_permission'),
+                        active: true
+                      })
+                      resolve(false)
+                    }
+                  })
+                },
+                onCancel: () => {
+                  Ext.tabs.create({
+                    url: goUivUrl('https://go.ui.vision/?help=firefox_access_data_permission'),
+                    active: true
+                  })
+                  resolve(false)
+                }
+              })
+            } else {
+              resolve(true)
+            }
+          }
+        )
+      } else {
+        resolve(true)
+      }
+    })
+  }
+
+  isEditingScratchMacro = () => {
+    const { src } = this.props.editing.meta
+    return !!(src && src.name === RECORD_SCRATCH_MACRO)
+  }
+
+  onToggleRecord = async () => {
+    if (isCVTypeForDesktop(this.props.config.cvScope)) {
+      const msg =
+        'Recording is only available for browser automation. Desktop automation macros are created by adding XClick and other visual commands step by step.'
+
+      this.props.addLog('warning', msg)
+      return message.warn(msg, 2.5)
+    }
+
+    const tabInfo = await this.getCurrentRecordedtab()
+    if (!tabInfo || !/^(https?:|file:)/.test(tabInfo.url)) {
+      return message.error(
+        'Web recording works only on normal browser pages. For other pages, please use desktop automation.'
+      )
+    }
+
+    if (this.props.status === C.APP_STATUS.RECORDER) {
+      this.props.stopRecording()
+      // Note: remove targetOptions from all commands (table recordings only —
+      // a JS recording writes script lines, there are no commands to touch)
+      if (!this.props.isScriptView) {
+        this.props.normalizeCommands()
+      }
+    } else {
+      const permissionResult = await this.askPermission()
+      if (!permissionResult) {
+        return
+      }
+
+      // JS editor: record straight into the open script — each recorded
+      // action is appended as a uiv.* line (see RECORD_ADD_COMMAND), so the
+      // table-mode scratch macro indirection does not apply
+      if (this.props.isScriptView) {
+        this.props.startRecording()
+        return
+      }
+
+      // Record into the scratch macro "#current" instead of the open macro.
+      // If "#current" is already open, keep recording into it (multi-take);
+      // otherwise ask about unsaved changes (same dialog as the Files tree)
+      // and open a fresh "#current".
+      if (!this.isEditingScratchMacro()) {
+        try {
+          await getSaveTestCase().saveOrNot()
+          await this.props.upsertTestCase({ name: RECORD_SCRATCH_MACRO, data: { commands: [] } })
+          await this.props.editTestCase(RECORD_SCRATCH_MACRO)
+        } catch (e) {
+          this.props.addLog('error', `Cannot prepare the "${RECORD_SCRATCH_MACRO}" macro for recording: ${e.message}`)
+          return
+        }
+      }
+
+      this.props.startRecording()
+    }
+  }
+
+
+  render () {
+    const isRecording = this.props.status === C.APP_STATUS.RECORDER
+
+    return (
+      <div className="macro-dev-toolbar">
+        <Button
+          className={isRecording ? 'record-button recording' : 'record-button'}
+          danger={isRecording}
+          disabled={this.props.player.status !== C.PLAYER_STATUS.STOPPED}
+          title={
+            isRecording
+              ? 'Stop recording'
+              : this.props.isScriptView
+                ? 'Record — browser actions are appended to the script as uiv.* lines'
+                : 'Record'
+          }
+          onClick={this.onToggleRecord}
+        >
+          <FontAwesomeIcon icon={faCircleDot} />
+          <span> {isRecording ? 'Stop' : 'Rec'}</span>
+        </Button>
+      </div>
+    )
+  }
+}
+
+export default connect(
+  state => ({
+    editing: state.editor.editing,
+    player: state.player,
+    status: state.status,
+    config: state.config,
+    isScriptView: isScriptMacroView(state)
+  }),
+  dispatch => bindActionCreators({ ...actions, ...simpleActions }, dispatch)
+)(DevToolbar)
+

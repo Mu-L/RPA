@@ -6,7 +6,7 @@ import { bindActionCreators } from 'redux'
 import * as actions from '../../actions'
 import { cn, delayMs, setIn, waitForRenderComplete } from '../../common/utils'
 import { FocusArea } from '../../reducers/state'
-import { getLicenseService } from '../../services/license'
+import { openSettings } from '../../ext/common/tab'
 import { StorageManagerEvent, StorageStrategyType, getStorageManager } from '../../services/storage'
 import './sidebar.scss'
 import SidebarTestCases from './test_cases'
@@ -98,14 +98,9 @@ class Sidebar extends React.Component {
       if (e.message && /xFile is not installed yet/.test(e.message)) {
         this.props.updateUI({ showXFileNotInstalledDialog: true })
       } else {
-        this.props.updateUI({ showSettings: true, settingsTab: 'xmodules' })
+        openSettings('xmodules')
       }
     })
-  }
-
-  openRegisterSettings = (e) => {
-    if (e && e.preventDefault)  e.preventDefault()
-    this.props.updateUI({ showSettings: true, settingsTab: 'register' })
   }
 
   onClickSidebar = () => {
@@ -182,11 +177,8 @@ class Sidebar extends React.Component {
           <Button
             type="primary"
             onClick={() => {
-              this.props.updateUI({
-                showXFileNotInstalledDialog: false,
-                showSettings: true,
-                settingsTab: 'xmodules'
-              })
+              this.props.updateUI({ showXFileNotInstalledDialog: false })
+              openSettings('xmodules')
             }}
           >
             Open Settings
@@ -196,47 +188,11 @@ class Sidebar extends React.Component {
     )
   }
 
-  shouldRenderMacroNote () {
-    const { xmodulesStatus, storageMode } = this.props.config
-
-    if (storageMode !== StorageStrategyType.XFile)  return false
-    if (xmodulesStatus === 'pro') return false
-
-    const macroStorage = getStorageManager().getMacroStorage()
-    return macroStorage.getDisplayCount() < macroStorage.getTotalCount()
-  }
-
-  renderMacroNote () {
-    if (!this.shouldRenderMacroNote())  return null
-
-    const max = getLicenseService().getMaxXFileMacros()
-    const link = getLicenseService().getUpgradeUrl()
-
-    return (
-      <div className="note-for-macros">
-        {getLicenseService().hasNoLicense() ? (
-          <div>
-            Hard-Drive Access (PRO Feature):
-            <br />In FREE version, only the first {max} files/folders are displayed.
-            <br /><a href={link} onClick={this.openRegisterSettings}>Upgrade to PRO</a> to remove limit.
-          </div>
-        ) : null}
-
-        {getLicenseService().isPersonalLicense() ? (
-          <div>
-            XModules in Free Edition:
-            <br />Only the first {max} files/folders displayed.
-            <br /><a href={link} onClick={this.openRegisterSettings}>Upgrade to PRO or Enterprise</a> for unlimited files
-          </div>
-        ) : null}
-      </div>
-    )
-  }
 
   render () {
     return (
       <div
-        className={cn('sidebar', { 'with-xmodules-note': this.shouldRenderMacroNote() })}
+        className={cn('sidebar')}
         ref={el => { this.$dom = el }}
         style={{ minWidth: this.getSideBarMinWidth() }}
         onClickCapture={this.onClickSidebar}
@@ -252,7 +208,6 @@ class Sidebar extends React.Component {
         </div>
 
         <div className="sidebar-storage-mode">
-          {this.renderMacroNote()}
 
           <div className="storage-mode-header">
             <h3>Storage Mode</h3>
@@ -270,7 +225,7 @@ class Sidebar extends React.Component {
                 }}
               />
             ) : null}
-            <a href="https://goto.ui.vision/x/idehelp?help=storage_mode" target="_blank">More Info</a>
+            <a href="https://go.ui.vision/?help=storage_mode" target="_blank">More Info</a>
           </div>
           <Select
             style={{ width: '100%' }}
@@ -304,7 +259,6 @@ class Sidebar extends React.Component {
 export default connect(
   state => ({
     status: state.status,
-    testSuites: state.editor.testSuites,
     editing: state.editor.editing,
     player: state.player,
     config: state.config,

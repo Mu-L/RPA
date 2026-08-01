@@ -58,6 +58,40 @@ const isValidKeyConstant = (pattern) => {
 const DEFAULT_KEY = 'main'
 const cache = {}
 
+// Variables on their way out. Like DEPRECATED_COMMANDS in common/command.ts,
+// deprecation is about new authoring — table macros that already use them keep
+// working unchanged. `jsError` is set when the variable cannot work in a JS
+// script at all: reading it there fails with this message instead of handing
+// back a plausible-looking number that is silently meaningless.
+export const DEPRECATED_VARIABLES = [
+  {
+    name: '!CURRENT_TAB_NUMBER_RELATIVE',
+    note: 'deprecated — table macros only; in JS compute it from !CURRENT_TAB_NUMBER',
+    jsError:
+      "'!CURRENT_TAB_NUMBER_RELATIVE' is deprecated and cannot work in a JS script: every uiv call is its own macro run and re-baselines it, so any value read here is meaningless. " +
+      "Compute it instead — capture the start index once and subtract: var startTab = uiv.getVar('!CURRENT_TAB_NUMBER'); … uiv.getVar('!CURRENT_TAB_NUMBER') - startTab"
+  },
+  {
+    name: '!CURRENT_TAB_NUMBER_RELATIVE_INDEX',
+    note: 'deprecated — internal player bookkeeping for the relative tab baseline',
+    jsError:
+      "'!CURRENT_TAB_NUMBER_RELATIVE_INDEX' is deprecated internal player bookkeeping and is re-set before every uiv call. " +
+      "Use uiv.getVar('!CURRENT_TAB_NUMBER') for the current tab index."
+  },
+  {
+    name: '!CURRENT_TAB_NUMBER_RELATIVE_ID',
+    note: 'deprecated — internal player bookkeeping for the relative tab baseline',
+    jsError:
+      "'!CURRENT_TAB_NUMBER_RELATIVE_ID' is deprecated internal player bookkeeping and is re-set before every uiv call. " +
+      "Use uiv.getVar('!CURRENT_TAB_NUMBER') for the current tab index."
+  }
+]
+
+export const getDeprecatedVariable = (name) => {
+  const key = ((name || '') + '').trim().toUpperCase()
+  return DEPRECATED_VARIABLES.find(item => item.name === key) || null
+}
+
 const validateVariableName = (name) => {
   if (name.charAt(0) === '!') {
     name = name.substr(1)
@@ -390,6 +424,23 @@ export default function varsFactory (name = DEFAULT_KEY, options = {}, initial =
     isReadOnly: (variable) => {
       const str = (variable && variable.toUpperCase) ? variable.toUpperCase() : ''
       return opts.readonly.indexOf(str) !== -1
+    },
+    // Does the pool currently hold a value for this name? `get` alone cannot
+    // answer that — an unset name and a name set to undefined both read as
+    // undefined, which is what made uiv.getVar silently return undefined for
+    // typos. Own-property check: keys are stored uppercased, so an inherited
+    // Object.prototype member can never masquerade as a variable.
+    has: (field) => {
+      const key = ((field || '') + '').trim().toUpperCase()
+      return key.length > 0 && Object.prototype.hasOwnProperty.call(vars, key)
+    },
+    // Is this a name the engine knows? Plain (non-'!') names are always fine;
+    // '!' names are checked against the internal-variable allowlist above,
+    // which stays the ONE place those names are maintained.
+    isSupportedName: (field) => {
+      const key = ((field || '') + '').trim().toUpperCase()
+      if (key.length === 0) return false
+      return key.indexOf('!') !== 0 || !opts.isInvalidInternalVar(key)
     },
     dump: () => ({...vars}),
     onChange: (fn) => {

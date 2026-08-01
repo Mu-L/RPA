@@ -1,10 +1,8 @@
 .control-panel-container {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 100px;
-  padding: 5px 10px 15px;
+  flex: none;
+  padding: 8px 10px 2px;
+  // transparent: the side panel's gradient frame shows through
+  background: transparent;
 }
 
 .control-panel {
@@ -14,14 +12,35 @@
     justify-content: center;
     margin-bottom: 6px;
 
+    // help link sits flush at the very bottom of the panel
+    &:last-child {
+      margin-bottom: 0;
+    }
+
     button > svg {
       width: 15px;
       height: 15px;
       margin-right: 5px;
     }
 
+    button {
+      padding-left: 8px;
+      padding-right: 8px;
+    }
+
+    button.icon-only > svg {
+      margin-right: 0;
+    }
+
+    // record dot is red when idle; while recording the antd danger style takes over
+    button.record-button:not(.recording):not(:disabled) > svg {
+      color: #cf1322;
+    }
+
     a {
+      // same size as the antd button labels next to it
       font-size: 14px;
+      line-height: 1.2;
       text-decoration: underline;
       // link color
       color: #007bff;

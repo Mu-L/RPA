@@ -6,6 +6,7 @@ import { ensureExtName, getPageDpi } from '@/common/utils'
 import Ext from '@/common/web_extension'
 import { getState } from '@/ext/common/global_state'
 import { store } from '@/redux'
+import * as act from '@/actions'
 import { getScreenshotInSearchArea, saveDataUrlToLastDesktopScreenshot, saveDataUrlToLastScreenshot } from '@/search_vision'
 import { getNativeCVAPI } from '@/services/desktop'
 import * as C from '@/common/constant'
@@ -164,7 +165,10 @@ export const captureImage = async (args: any) => {
       })
   } else {
     const captureScreenshotService = new CaptureScreenshotService({
-      captureVisibleTab: (windowId, options) => csIpc.ask('PANEL_CAPTURE_VISIBLE_TAB', { windowId, options })
+      captureVisibleTab: (windowId, options) => csIpc.ask('PANEL_CAPTURE_VISIBLE_TAB', { windowId, options }),
+      onThrottleWait: (waitMs) => {
+        store.dispatch(act.addLog('warning', `W370: Screenshot rate limit reached — waited ${waitMs}ms for the next screenshot slot (Chrome allows ~2 captures/sec). Visual/OCR steps in tight loops are slowed down by this; consider adding a pause between them.`))
+      }
     })
 
     return getScreenshotInSearchArea({

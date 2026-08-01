@@ -1,5 +1,7 @@
-export default {
-  "AI(Beta)/CU_PlayTicTacToe": {
+import { JS_DEMOS } from './preinstall_js_scripts'
+
+const preinstallMacros = {
+  "LLM AI Commands/CU_PlayTicTacToe": {
     "CreationDate": "2024-12-02",
     "Commands":  [
     {
@@ -106,7 +108,7 @@ export default {
     }
   ]
   },
-    "AI(Beta)/CU_UseWebCalculator": {
+    "LLM AI Commands/CU_UseWebCalculator": {
     "CreationDate": "2024-12-02",
     "Commands":  [
     {
@@ -189,7 +191,7 @@ export default {
     }
   ]
   },
-    "AI(Beta)/CU_FillForm": {
+    "LLM AI Commands/CU_FillForm": {
     "CreationDate": "2024-12-02",
     "Commands":  [
     {
@@ -266,7 +268,7 @@ export default {
     }
   ]
   },
-    "AI(Beta)/CU_PressClear_Desktop": {
+    "LLM AI Commands/CU_PressClear_Desktop": {
     "CreationDate": "2024-12-03",
     "Commands":  [
     {
@@ -332,7 +334,7 @@ export default {
   ]
   },
   
-  "AI(Beta)/Prompt_CompareImages": {
+  "LLM AI Commands/Prompt_CompareImages": {
     "CreationDate": "2024-11-11",
     "Commands":  [
     {
@@ -373,7 +375,7 @@ export default {
     }
   ]
   },
-   "AI(Beta)/Prompt_ParseHTML": {
+   "LLM AI Commands/Prompt_ParseHTML": {
     "CreationDate": "2024-11-22",
     "Commands":   [
     {
@@ -420,12 +422,12 @@ export default {
     }
   ]
   },
-  "AI(Beta)/ScreenXY_SearchForum": {
+  "LLM AI Commands/ScreenXY_SearchForum": {
     "CreationDate": "2024-11-22",
     "Commands":  [
     {
       "Command": "open",
-      "Target": "https://forum.ui.vision/",
+      "Target": "https://forum.ocr.space/",
       "Value": "",
       "Description": ""
     },
@@ -457,7 +459,7 @@ export default {
       "Command": "XClick",
       "Target": "${!ai1},${!ai2}",
       "Value": "",
-      "Description": "Click search icon"
+      "Description": "Click search icon (real input via the XModule)"
     },
     {
       "Command": "XType",
@@ -491,7 +493,7 @@ export default {
     }
   ]
   },
-  "AI(Beta)/ScreenXY_PressClear_Desktop": {
+  "LLM AI Commands/ScreenXY_PressClear_Desktop": {
     "CreationDate": "2024-11-22",
     "Commands":  [
     {
@@ -587,7 +589,7 @@ export default {
       },
       {
         "Command": "click",
-        "Target": "//span[contains(text(),\"UI.Vision IDE\")]",
+        "Target": "//span[contains(text(),\"Ui.Vision IDE\")]",
         "Value": ""
       },
       {
@@ -616,7 +618,7 @@ export default {
         "Value": ""
       },
       {
-        "Command": "clickAndWait",
+        "Command": "click",
         "Target": "xpath=//*[@id=\"mG61Hd\"]/div/div/div[3]/div/div/div/span/span",
         "Value": "",
         "Targets": [
@@ -645,7 +647,7 @@ export default {
         "Value": ""
       },
       {
-        "Command": "clickAndWait",
+        "Command": "click",
         "Target": "xpath=//*[@id=\"mG61Hd\"]/div/div/div[3]/div[1]/div[1]/div[2]/span/span",
         "Value": ""
       },
@@ -673,51 +675,6 @@ export default {
         "Command": "assertTitle",
         "Target": "*Form Filling*",
         "Value": ""
-      }
-    ]
-  },
-  "Core/DemoDragDrop": {
-    "CreationDate": "2017-10-18",
-    "Commands": [
-      {
-        "Command": "open",
-        "Target": "https://ui.vision/demo/webtest/dragdrop/",
-        "Value": ""
-      },
-      {
-        "Command": "echo",
-        "Target": "Reduce replay speed so we can better see what is going on...",
-        "Value": ""
-      },
-      {
-        "Command": "store",
-        "Target": "medium",
-        "Value": "!replayspeed"
-      },	
-      {
-        "Command": "dragAndDropToObject",
-        "Target": "id=one",
-        "Value": "id=bin"
-      },
-      {
-        "Command": "dragAndDropToObject",
-        "Target": "id=two",
-        "Value": "id=bin"
-      },
-      {
-        "Command": "dragAndDropToObject",
-        "Target": "id=three",
-        "Value": "id=bin"
-      },
-      {
-        "Command": "dragAndDropToObject",
-        "Target": "id=four",
-        "Value": "id=bin"
-      },
-      {
-        "Command": "dragAndDropToObject",
-        "Target": "id=five",
-        "Value": "id=bin"
       }
     ]
   },
@@ -815,7 +772,7 @@ export default {
         "Value": ""
       },
       {
-        "Command": "clickAndWait",
+        "Command": "click",
         "Target": "linkText=OnDownload command",
         "Value": ""
       }
@@ -960,7 +917,7 @@ export default {
         "Value": ""
       },
       {
-        "Command": "verifyValue",
+        "Command": "assertValue",
         "Target": "id=tesla",
         "Value": "y"
       },
@@ -1272,7 +1229,7 @@ export default {
       },
       {
         "Command": "click",
-        "Target": "//span[contains(text(),\"UI.Vision IDE\")]",
+        "Target": "//span[contains(text(),\"Ui.Vision IDE\")]",
         "Value": "",
         "Description": ""
       },
@@ -1283,7 +1240,7 @@ export default {
         "Description": ""
       },
       {
-        "Command": "clickAndWait",
+        "Command": "click",
         "Target": "xpath=//div[3]/div/div/div/span",
         "Value": "",
         "Description": ""
@@ -1337,7 +1294,7 @@ export default {
       "Description": ""
     },
     {
-      "Command": "clickAndWait",
+      "Command": "click",
       "Target": "linkText=read more@POS=1",
       "Value": "",
       "Description": ""
@@ -1355,7 +1312,7 @@ export default {
       "Description": ""
     },
     {
-      "Command": "clickAndWait",
+      "Command": "click",
       "Target": "linkText=read more@POS=2",
       "Value": "",
       "Description": ""
@@ -1650,7 +1607,7 @@ export default {
       },
       {
         "Command": "click",
-        "Target": "//span[contains(text(),\"UI.Vision IDE\")]",
+        "Target": "//span[contains(text(),\"Ui.Vision IDE\")]",
         "Value": "",
         "Description": ""
       },
@@ -1661,7 +1618,7 @@ export default {
         "Description": ""
       },
       {
-        "Command": "clickAndWait",
+        "Command": "click",
         "Target": "xpath=//div[3]/div/div/div/span",
         "Value": "",
         "Description": ""
@@ -2421,7 +2378,7 @@ export default {
       "Description": ""
     },
     {
-      "Command": "clickAndWait",
+      "Command": "click",
       "Target": "linkText=calculator",
       "Value": "",
       "Description": "The calculator website is NOT affiliated with Ui.Vision."
@@ -2548,466 +2505,7 @@ export default {
     }
   ]
   },
-  "Core/DemoExecuteScript":  {
-    "CreationDate": "2024-2-1",
-    "Commands": [
-      {
-        "Command": "store",
-        "Target": "fast",
-        "Value": "!replayspeed",
-        "Description": ""
-      },
-      {
-        "Command": "open",
-        "Target": "https://ui.vision/demo/executescript",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "assertText",
-        "Target": "//*[@id=\"content\"]/div[2]/div/h2[1]",
-        "Value": "Input box to display some results",
-        "Description": ""
-      },
-      {
-        "Command": "verifyText",
-        "Target": "//*[@id=\"content\"]/div[2]/div/h2[1]",
-        "Value": "Input box to display some results",
-        "Description": ""
-      },
-      {
-        "Command": "verifyTitle",
-        "Target": "Selenium IDE executeScript Demo Page",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "assertTitle",
-        "Target": "Selenium IDE executeScript Demo Page",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "executeScript",
-        "Target": "function randomString(length, chars) {\n    var result = '';\n    for (var i = length; i > 0; --i) result += chars[Math.round(Math.random() * (chars.length - 1))];\n    return result;\n}\n\n//The executeScript script(s) can have multiple lines!\n\n//Demo: Here we generate a random key \nvar s = randomString(8, '0123456789ABCDE') + \"<= Random String\";\n\n//Set the page title to the random key \ndocument.title = s;\n\nreturn s;\n",
-        "Value": "s",
-        "Description": "executeScript can run Javascript... and store the result in a variable (optional)"
-      },
-      {
-        "Command": "assertTitle",
-        "Target": "${s}",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "comment",
-        "Target": "Use sourceSearch to assert we have the right Google Analytics Code",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "sourceSearch",
-        "Target": "G-VJNCDYRXBP",
-        "Value": "matches",
-        "Description": ""
-      },
-      {
-        "Command": "if",
-        "Target": "${matches} == 0",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "throwError",
-        "Target": "Google Analytics ID is wrong!",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "end",
-        "Target": "",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "echo",
-        "Target": "First some basic calculations with STORE",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "store",
-        "Target": "15",
-        "Value": "AAA",
-        "Description": ""
-      },
-      {
-        "Command": "store",
-        "Target": "10",
-        "Value": "BBB",
-        "Description": ""
-      },
-      {
-        "Command": "executeScript_Sandbox",
-        "Target": "return (Number (${AAA}) - Number (${BBB}) )",
-        "Value": "CCC",
-        "Description": ""
-      },
-      {
-        "Command": "echo",
-        "Target": "${CCC}",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "executeScript",
-        "Target": "document.title = ${CCC};",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "assertTitle",
-        "Target": "5",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "store",
-        "Target": "SELenium IDe",
-        "Value": "AAA",
-        "Description": ""
-      },
-      {
-        "Command": "executeScript_Sandbox",
-        "Target": "return ${AAA}.toUpperCase()",
-        "Value": "CCC",
-        "Description": ""
-      },
-      {
-        "Command": "echo",
-        "Target": "${CCC}",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "type",
-        "Target": "id=sometext",
-        "Value": "${CCC}",
-        "Description": ""
-      },
-      {
-        "Command": "echo",
-        "Target": "Generate TODAYs date in in YYYY-MM-DD format ",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "comment",
-        "Target": "Create today's date in the YYYY-MM-DD format",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "executeScript_Sandbox",
-        "Target": "var d = new Date(); \nvar m = ((d.getMonth()+1)<10)?'0'+(d.getMonth()+1):(d.getMonth()+1);\nvar d2 = (d.getDate() <10)?'0'+d.getDate():d.getDate(); \nvar date_today = d.getFullYear()+\"-\"+m+\"-\"+d2; \nreturn date_today",
-        "Value": "mydate",
-        "Description": ""
-      },
-      {
-        "Command": "echo",
-        "Target": "Today is ${mydate}",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "echo",
-        "Target": "Pick a random item from a list, useful for data-driven testing",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "executeScript_Sandbox",
-        "Target": "return new Array ('cat','dog','fish','dog','deer','frog','whale','dog','seal','horse','elephant')",
-        "Value": "names",
-        "Description": ""
-      },
-      {
-        "Command": "executeScript_Sandbox",
-        "Target": "return ${names}.length",
-        "Value": "len",
-        "Description": ""
-      },
-      {
-        "Command": "echo",
-        "Target": "array length = ${len}",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "executeScript_Sandbox",
-        "Target": "return Math.floor(Math.random()*${len})",
-        "Value": "num",
-        "Description": ""
-      },
-      {
-        "Command": "echo",
-        "Target": "num=${num}",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "echo",
-        "Target": "The next command picks the random item",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "executeScript_Sandbox",
-        "Target": "return ${names}[${num}]",
-        "Value": "myrandomname",
-        "Description": ""
-      },
-      {
-        "Command": "store",
-        "Target": "Today is ${mydate}, and we draw a ${myrandomname}",
-        "Value": "output",
-        "Description": ""
-      },
-      {
-        "Command": "echo",
-        "Target": "To is ${mydate}, and we draw a ${myrandomname}",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "type",
-        "Target": "id=sometext",
-        "Value": "${output}",
-        "Description": ""
-      },
-      {
-        "Command": "if",
-        "Target": "parseFloat(${!runtime}) > 20",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "throwError",
-        "Target": "Runtime too slow (${!runtime} seconds), test failed",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "else",
-        "Target": "",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "echo",
-        "Target": "Runtime Ok, test passed!",
-        "Value": "green",
-        "Description": ""
-      },
-      {
-        "Command": "end",
-        "Target": "",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "comment",
-        "Target": "With @POS you click on the (in this case) 3rd link with the same name. Great for looping over a list of links with the same name.",
-        "Value": "green",
-        "Description": ""
-      },
-      {
-        "Command": "clickAndWait",
-        "Target": "linkText=This link@POS=3",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "comment",
-        "Target": "Demo: Create array and then loop over it with forEach",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "executeScript",
-        "Target": "var arr = [\"Hello\",\"World\", \"2020\"]; \nreturn arr;",
-        "Value": "myarray",
-        "Description": "We must use executeScript here, since executeScript _Sandbox does not support returning arrays."
-      },
-      {
-        "Command": "forEach",
-        "Target": "myarray",
-        "Value": "elem",
-        "Description": ""
-      },
-      {
-        "Command": "echo",
-        "Target": "${elem}",
-        "Value": "blue",
-        "Description": ""
-      },
-      {
-        "Command": "end",
-        "Target": "",
-        "Value": "",
-        "Description": ""
-      }
-    ] 
-  },
-  "Core/DemoTabs": {
-     "CreationDate": "2022-11-11",
-    "Commands": [
-      {
-        "Command": "open",
-        "Target": "https://ui.vision/demo/tabs",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "click",
-        "Target": "linkText=Open new web page in new browser tab",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "selectWindow",
-        "Target": "tab=1",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "assertTitle",
-        "Target": "*1* TAB1",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "echo",
-        "Target": "TabIndexAbsolute=${!current_tab_number} TabIndexRELATIVE=${!current_tab_number_relative}",
-        "Value": "blue",
-        "Description": ""
-      },
-      {
-        "Command": "type",
-        "Target": "id=sometext1",
-        "Value": "this is tab 1",
-        "Description": ""
-      },
-      {
-        "Command": "click",
-        "Target": "linkText=Open yet another web page in a new browser tab",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "selectWindow",
-        "Target": "tab=2",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "assertTitle",
-        "Target": "*2* TAB2",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "type",
-        "Target": "id=sometext2",
-        "Value": "And this is tab 2!",
-        "Description": ""
-      },
-      {
-        "Command": "selectWindow",
-        "Target": "tab=1",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "assertTitle",
-        "Target": "*1* TAB1",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "type",
-        "Target": "id=sometext1",
-        "Value": "Now back in tab 1 - test done!",
-        "Description": ""
-      },
-      {
-        "Command": "selectWindow",
-        "Target": "tab=close",
-        "Value": "",
-        "Description": "Close the current tab (tab1)"
-      },
-      {
-        "Command": "assertTitle",
-        "Target": "*2* TAB2",
-        "Value": "",
-        "Description": "What was tab2 is now the tab with the relative ID=1 (since the old tab1 is closed)"
-      },
-      {
-        "Command": "selectWindow",
-        "Target": "tab=1",
-        "Value": "",
-        "Description": "Now switching to the NEW tab1 means being on what was formerly tab2. It is the tab we are already on."
-      },
-      {
-        "Command": "assertTitle",
-        "Target": "*2* TAB2",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "comment",
-        "Target": "We can also open new tabs",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "echo",
-        "Target": "TabIndexAbsolute=${!current_tab_number} TabIndexRELATIVE=${!current_tab_number_relative}",
-        "Value": "green",
-        "Description": ""
-      },
-      {
-        "Command": "selectWindow",
-        "Target": "tab=open",
-        "Value": "https://ui.vision",
-        "Description": ""
-      },
-      {
-        "Command": "selectWindow",
-        "Target": "tab=open",
-        "Value": "https://ocr.space",
-        "Description": ""
-      },
-      {
-        "Command": "type",
-        "Target": "id=imageUrl",
-        "Value": "Ui.Vision Tab Test done",
-        "Description": ""
-      },
-      {
-        "Command": "echo",
-        "Target": "TabIndexAbsolute=${!current_tab_number} TabIndexRELATIVE=${!current_tab_number_relative}",
-        "Value": "brown",
-        "Description": ""
-      },
-      {
-        "Command": "assert",
-        "Target": "!current_tab_number_relative",
-        "Value": "3",
-        "Description": ""
-      }
-    ]
-  },
+
   "XModules/DemoVisualUITest":
   {
     "CreationDate": "2022-2-21",
@@ -3023,12 +2521,12 @@ export default {
         "Value": ""
       },
       {
-        "Command": "visualVerify",
+        "Command": "visualAssert",
         "Target": "uitest_logo_wide_dpi_96.png@0.70",
         "Value": ""
       },
       {
-        "Command": "visualVerify",
+        "Command": "visualAssert",
         "Target": "uitest_share_dpi_96.png@0.70",
         "Value": ""
       },
@@ -3043,13 +2541,13 @@ export default {
         "Value": ""
       },
       {
-        "Command": "visualVerify",
+        "Command": "visualAssert",
         "Target": "uitest_logo_mobile_dpi_96.png",
         "Value": ""
       },
       {
         "Command": "comment",
-        "Target": "Missing menu is critical, so we use ASSERT (instead of just VERIFY)",
+        "Target": "visualAssert stops the macro if the image is not found on the page",
         "Value": ""
       },
       {
@@ -3226,7 +2724,7 @@ export default {
     ]
   },
   
-  "XModules/DemoXRun":	
+  "XModules/DemoXRun":
   {
     "CreationDate": "2019-09-16",
     "Commands": [
@@ -3267,7 +2765,7 @@ export default {
       },
       {
         "Command": "comment",
-        "Target": "You find the example PowerShell script for this demo in the UI.Vision docs for \"XRunAndWait\"",
+        "Target": "You find the example PowerShell script for this demo in the Ui.Vision docs for \"XRunAndWait\"",
         "Value": "-executionpolicy bypass -File  c:\\test\\test1.ps1  c:\\test\\test.txt Hello"
       },
       {
@@ -3519,7 +3017,7 @@ export default {
       },
       {
         "Command": "comment",
-        "Target": "visualVerify // draw_compare_dpi_96.png",
+        "Target": "visualAssert // draw_compare_dpi_96.png",
         "Value": "",
         "Description": ""
       },
@@ -3609,8 +3107,8 @@ export default {
       }
     ]
   },
-  
-  "XModules/DemoXMove":	  
+
+  "XModules/DemoXMove":
   {
     "CreationDate": "2021-05-17",
    "Commands": 
@@ -3628,7 +3126,7 @@ export default {
         "Description": ""
       },
       {
-        "Command": "clickAndWait",
+        "Command": "click",
         "Target": "linkText=this external website",
         "Value": "",
         "Description": ""
@@ -3719,7 +3217,7 @@ export default {
       }
     ]
    },
-   
+
   "XModules_Desktop/DemoXDesktopAutomation":
   {
     "CreationDate": "2024-02-13",
@@ -4116,10 +3614,52 @@ export default {
         "Value": "${!COL3}"
       },
       {
-        "Command": "clickAndWait",
+        "Command": "click",
         "Target": "xpath=//span/span",
         "Value": ""
       }
     ]
-  }     
-  }	
+  }
+  }
+
+// Everything preinstalled lives below ONE top-level folder, so the tree opens
+// with the user's own macros at the root and the shipped material tucked away
+// in a folder whose name says what it is.
+// Note: the "AI Generated" folder is NOT preinstalled — the AI chat creates it
+// on demand, at the root.
+export const PREINSTALL_ROOT_FOLDER = 'Demo and QA Test Scripts'
+
+// All preinstalled table macros live below "Classic" (incl. the LLM AI Commands
+// demos).
+// Keep the folder names in sync with isUntouchedPreinstallDemo in
+// services/ai/macro_agent/tools.ts (which recognizes demos by path) and
+// CLASSIC_DEMO_FOLDER in recomputed/index.ts (which hides Classic in
+// JS-first mode).
+export const CLASSIC_PREINSTALL = Object.keys(preinstallMacros).reduce((acc, key) => {
+  acc[`${PREINSTALL_ROOT_FOLDER}/Classic/${key}`] = preinstallMacros[key]
+  return acc
+}, {})
+
+// Two sub-folders, one per macro type: "Classic" (command tables) and "JS"
+// (script macros), mirroring each other name for name and folder for folder.
+// In JS-first mode only "JS" is shown — the Classic folder is hidden by the
+// tree, not removed. Script macros keep the normal macro JSON envelope but
+// carry the program in `Script` (Commands stays an empty array) — see
+// fromJSONString. (Folders were "1js", then "Demos"/"Test_Cases_For_QA", then
+// top-level "Classic"/"JS".)
+// `path` mirrors the classic folder structure for the ported macros
+// (JS/Core/DemoAutofill.js next to Classic/Core/DemoAutofill); the
+// hand-written demos have no path and stay at the JS root.
+export const JS_PREINSTALL = JS_DEMOS.reduce((acc, demo) => {
+  acc[`${PREINSTALL_ROOT_FOLDER}/JS/${demo.path || demo.fileName}`] = {
+    CreationDate: '2026-07-24',
+    Commands: [],
+    Script: demo.code
+  }
+  return acc
+}, {})
+
+// NOTHING is auto-installed from these sets anymore: a fresh install starts
+// with an empty macro tree (less noise, and no stale-demo upgrade dialogs).
+// The two "Restore Demo Macros" buttons under Settings > General write one
+// set each, on demand — see restoreDemoMacros in actions/index.js.

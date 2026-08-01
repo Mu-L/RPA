@@ -35,15 +35,15 @@ export class XUserIO extends XModule<NativeXYAPI> {
 	}
 
   checkUpdateLink (modVersion: string, extVersion: string): string {
-    return `https://goto.ui.vision/x/idehelp?help=xclick_updatecheck&xversion=${modVersion}&kantuversion=${extVersion}`
+    return `https://go.ui.vision/?help=xclick_updatecheck&xversion=${modVersion}&kantuversion=${extVersion}`
   }
 
   downloadLink (): string {
-    return 'https://goto.ui.vision/x/idehelp?help=xclick_download'
+    return 'https://go.ui.vision/?help=xclick_download'
   }
 
   infoLink (): string {
-    return 'https://goto.ui.vision/x/idehelp?help=xclick'
+    return 'https://go.ui.vision/?help=xclick'
   }
 }
 

@@ -60,6 +60,13 @@ const setProxy = (proxy) => {
 }
 
 const checkRelativeIndexArr = [];
+
+// The relative-tab baseline captured at Play-click (playtabIndex/playtabId)
+// can disagree with the tab the background actually plays in once `open`
+// re-establishes it (seen on the very first run after opening the panel:
+// DemoTabs' final `assert !current_tab_number_relative 3` got 2). The first
+// open/openBrowser of a run re-baselines from the background's toPlay tab.
+let needRelativeTabRebaseline = false;
 const checkRelativeIndex = (index) => {
   const Count  = checkRelativeIndexArr.filter(r => r === index).length
   if (Count == 0) {
@@ -70,17 +77,13 @@ const checkRelativeIndex = (index) => {
   }
 }
 
-const checkRelativeTabId = (tabId) => {
-  return new Promise((resolve, reject) => {
-    Ext.tabs.get(tabId)
-    .then(tab => {
-      if (tab.length != 0) {
-        resolve(true);
-      } else { resolve(false); }
-    }).catch(e => {
-      resolve(false);
-    })
-  })
+// Resolve the relative-tab baseline tab, or null if it was never captured
+// or no longer exists (e.g. closed by `selectWindow | tab=close`)
+const getRelativeBaselineTab = (tabId) => {
+  if (tabId == undefined || tabId == null) return Promise.resolve(null)
+  return Ext.tabs.get(tabId)
+    .then(tab => tab || null)
+    .catch(() => null)
 }
 
 const getTabIdwithIndex0 = (tabId) => {
@@ -113,6 +116,7 @@ export const initTestCasePlayer = ({ store, vars, interpreter, xCmdCounter, ocrC
         }
         // checkRelativeIndexArr = [];
         checkRelativeIndexArr.length = 0;
+        needRelativeTabRebaseline = true;
         vars.set(state.public.scope || {}, true)
         vars.set({
           '!StatusOK': true,
@@ -188,21 +192,35 @@ export const initTestCasePlayer = ({ store, vars, interpreter, xCmdCounter, ocrC
               if (result.index != undefined) {
                 const isFound = checkRelativeIndex(result.index);
                 if (isFound == 1 || 1) {
-                  const isFoundTab = await checkRelativeTabId(vars.get('!CURRENT_TAB_NUMBER_RELATIVE_ID'));
-                  let CURRENT_TAB_NUMBER_RELATIVE_INDEX = isFoundTab ? vars.get('!CURRENT_TAB_NUMBER_RELATIVE_INDEX') : 'NA';
-                  // const indexR = vars.get('!CURRENT_TAB_NUMBER_RELATIVE') + 1;
-                  // const indexR = result.index - CURRENT_TAB_NUMBER_RELATIVE_INDEX;
+                  let baselineIndex
                   if (state.mode == 'LOOP' && state.nextIndex == 1) {
-                    CURRENT_TAB_NUMBER_RELATIVE_INDEX = 0;
+                    baselineIndex = 0;
+                  } else {
+                    const baselineTab = await getRelativeBaselineTab(vars.get('!CURRENT_TAB_NUMBER_RELATIVE_ID'));
+                    if (baselineTab) {
+                      // baseline tab alive: use its live index — tabs opened or
+                      // closed to its left shift it, and "relative" is defined
+                      // against the tab, not the index it had at macro start
+                      baselineIndex = baselineTab.index;
+                      vars.set({ '!CURRENT_TAB_NUMBER_RELATIVE_INDEX': baselineTab.index }, true)
+                    } else {
+                      // baseline tab closed mid-macro (e.g. `selectWindow | tab=close`
+                      // on the start tab): keep the last known baseline index rather
+                      // than re-anchoring on whatever tab is active right now, which
+                      // made relative read 0 from that point on
+                      baselineIndex = vars.get('!CURRENT_TAB_NUMBER_RELATIVE_INDEX');
+                      if (typeof baselineIndex !== 'number' || isNaN(baselineIndex)) {
+                        // no baseline was ever recorded — last resort: active web tab
+                        const tabF = await getTabIdwithIndex0();
+                        baselineIndex = tabF && tabF['index'] != undefined ? tabF['index'] : 0;
+                        if (tabF && tabF['index'] != undefined) {
+                          vars.set({ '!CURRENT_TAB_NUMBER_RELATIVE_ID': tabF['id']}, true)
+                          vars.set({ '!CURRENT_TAB_NUMBER_RELATIVE_INDEX': tabF['index']}, true)
+                        }
+                      }
+                    }
                   }
-                  if (CURRENT_TAB_NUMBER_RELATIVE_INDEX == 'NA') {
-                    let tabF = await getTabIdwithIndex0();
-                    CURRENT_TAB_NUMBER_RELATIVE_INDEX = tabF['index'] != undefined ? tabF['index'] : 0;
-                    vars.set({ '!CURRENT_TAB_NUMBER_RELATIVE_ID': tabF['id']}, true)
-                    vars.set({ '!CURRENT_TAB_NUMBER_RELATIVE_INDEX': tabF['index']}, true)
-                  }
-                  // const indexR =  CURRENT_TAB_NUMBER_RELATIVE_INDEX == 0 ? 0: result.index - CURRENT_TAB_NUMBER_RELATIVE_INDEX;
-                  const indexR =  result.index - CURRENT_TAB_NUMBER_RELATIVE_INDEX;
+                  const indexR = result.index - baselineIndex;
                   vars.set({ '!CURRENT_TAB_NUMBER_RELATIVE': indexR}, true)
                 }
 
@@ -280,6 +298,26 @@ export const initTestCasePlayer = ({ store, vars, interpreter, xCmdCounter, ocrC
               if (byPass) return Promise.resolve(result)
 
               if (isFlowLogic)  return Promise.resolve({ nextIndex })
+
+              if (needRelativeTabRebaseline && /^(open|openBrowser)$/i.test(command.cmd)) {
+                return askBgToRun(command).then(async (cmdResult) => {
+                  try {
+                    const tab = await getPlayTab()
+                    if (tab && tab.index != undefined) {
+                      needRelativeTabRebaseline = false;
+                      vars.set({
+                        '!CURRENT_TAB_NUMBER': tab.index,
+                        '!CURRENT_TAB_NUMBER_RELATIVE': 0,
+                        '!CURRENT_TAB_NUMBER_RELATIVE_INDEX': tab.index,
+                        '!CURRENT_TAB_NUMBER_RELATIVE_ID': tab.id
+                      }, true)
+                    }
+                  } catch (e) {
+                    // keep the prepare-time baseline if the play tab can't be read
+                  }
+                  return cmdResult
+                })
+              }
 
               return askBgToRun(command)
             })
@@ -367,9 +405,21 @@ export const initTestCasePlayer = ({ store, vars, interpreter, xCmdCounter, ocrC
         }
       }
 
-      getPlayTab().then(tab => {
-        vars.set({ '!CURRENT_TAB_NUMBER': tab.index }, true)
-      })
+      const refreshTabNumber = () => getPlayTab()
+        .then(tab => { vars.set({ '!CURRENT_TAB_NUMBER': tab.index }, true) })
+        .catch(() => { /* tab-free command (e.g. store via uiv.run) — no play tab */ })
+
+      // JS scripts must WAIT for this write: every uiv.* call is its own player
+      // run, so fire-and-forget let the run report STOPPED before the write
+      // landed and the script read the PREVIOUS tab's index. Classic macros
+      // keep the unawaited call — they get the index from result.index in
+      // preRun anyway, and awaiting two browser round-trips on every store /
+      // echo / if / label would tax long CSV loops for nothing.
+      if (state && state.extra && state.extra.scriptSilent) {
+        prepares.push(refreshTabNumber())
+      } else {
+        refreshTabNumber()
+      }
       // Every command should return its window.url
       if (result && result.pageUrl) {
         vars.set({ '!URL': result.pageUrl }, true)
@@ -588,7 +638,11 @@ export const initTestCasePlayer = ({ store, vars, interpreter, xCmdCounter, ocrC
       ))
     }
 
-    store.dispatch(act.addLog('status', `Playing macro ${title}`))
+    // scriptSilent: one-command runs issued by the JS script runner — the
+    // script has its own start/end log lines, so skip the per-run banner
+    if (!extra.scriptSilent) {
+      store.dispatch(act.addLog('status', `Playing macro ${title}`))
+    }
   })
 
   player.on('PREPARED', ({ extra }) => {
@@ -647,11 +701,15 @@ export const initTestCasePlayer = ({ store, vars, interpreter, xCmdCounter, ocrC
     }
 
     const tcId = obj.extra && obj.extra.id
+    // scriptSilent: one-command runs from the JS script runner — no toasts,
+    // no per-run "Macro completed" log, no badge blink; the script runner
+    // reports start/end/errors itself. Error logs from commands still appear.
+    const scriptSilent = !!(obj.extra && obj.extra.scriptSilent)
 
     switch (obj.reason) {
       case player.C.END_REASON.COMPLETE:
       if (tcId) store.dispatch(act.updateMacroPlayStatus(tcId, MacroResultStatus.Success))
-        message.success('Macro completed running', 1.5)
+        if (!scriptSilent) message.success('Macro completed running', 1.5)
       break
 
       case player.C.END_REASON.ERROR:
@@ -663,7 +721,7 @@ export const initTestCasePlayer = ({ store, vars, interpreter, xCmdCounter, ocrC
         store.dispatch(act.updateMacroPlayStatus(item.resource.id, status))
       });
 
-      message.error('Macro encountered some error', 1.5)
+      if (!scriptSilent) message.error('Macro encountered some error', 1.5)
       break
     }
 
@@ -676,20 +734,22 @@ export const initTestCasePlayer = ({ store, vars, interpreter, xCmdCounter, ocrC
     const { frameId } = obj.extra
     const ms = getMacroMonitor().getDataFromInspector(frameId, MacroInspector.Timer)
 
-    store.dispatch(
-      act.addLog(
-        'info',
-        logMsg[obj.reason] + ` (Runtime ${milliSecondsToStringInSecond(ms)})`
+    if (!scriptSilent) {
+      store.dispatch(
+        act.addLog(
+          'info',
+          logMsg[obj.reason] + ` (Runtime ${milliSecondsToStringInSecond(ms)})`
+          )
         )
-      )
+    }
 
     getMacroMonitor().stopInspector(frameId, MacroInspector.Timer)
     getMacroMonitor().stopInspector(frameId, MacroInspector.LoopTimer)
     getMacroMonitor().stopInspector(frameId, MacroInspector.Countdown)
 
       // Note: show in badage the play result
-      if (obj.reason === player.C.END_REASON.COMPLETE ||
-        obj.reason === player.C.END_REASON.ERROR) {
+      if (!scriptSilent && (obj.reason === player.C.END_REASON.COMPLETE ||
+        obj.reason === player.C.END_REASON.ERROR)) {
         csIpc.ask('PANEL_UPDATE_BADGE', {
           type: 'play',
           blink: 5000,
@@ -723,10 +783,12 @@ export const initTestCasePlayer = ({ store, vars, interpreter, xCmdCounter, ocrC
     store.dispatch(act.addLog('reflect', `Executing: ${str}`))
 
       // Note: show in badage the current command index (start from 1)
-      csIpc.ask('PANEL_UPDATE_BADGE', {
-        type: 'play',
-        text: '' + (index + 1)
-      })
+      if (!extra || !extra.scriptSilent) {
+        csIpc.ask('PANEL_UPDATE_BADGE', {
+          type: 'play',
+          text: '' + (index + 1)
+        })
+      }
     })
 
   player.on('PLAYED_LIST', ({ indices }) => {
@@ -862,17 +924,6 @@ export const initTestSuitPlayer = ({store, vars, tcPlayer, xCmdCounter, ocrCmdCo
 
     store.dispatch(act.addLog('status', `Playing test suite ${title}`))
     store.dispatch(act.setPlayerMode(C.PLAYER_MODE.TEST_SUITE))
-    store.dispatch(Actions.updateTestSuite(extra.id, (ts) => {
-      return {
-        ...ts,
-        playStatus: {
-          isPlaying: true,
-          currentIndex: -1,
-          errorIndices: [],
-          doneIndices: []
-        }
-      }
-    }))
   })
 
   tsPlayer.on('LOOP_START', ({ loopsCursor }) => {
@@ -904,28 +955,6 @@ export const initTestSuitPlayer = ({store, vars, tcPlayer, xCmdCounter, ocrCmdCo
       lastErrMsg: '',
       tcIndex: index
     })
-
-    store.dispatch(Actions.updateTestSuite(extra.id, (ts) => {
-      return {
-        ...ts,
-        playStatus: {
-          ...ts.playStatus,
-          currentIndex: index
-        }
-      }
-    }))
-  })
-
-  tsPlayer.on('PLAYED_LIST', ({ indices, extra }) => {
-    store.dispatch(Actions.updateTestSuite(extra.id, (ts) => {
-      return {
-        ...ts,
-        playStatus: {
-          ...ts.playStatus,
-          doneIndices: indices
-        }
-      }
-    }))
   })
 
   tsPlayer.on('END', ({ reason, extra, opts }) => {
@@ -942,16 +971,6 @@ export const initTestSuitPlayer = ({store, vars, tcPlayer, xCmdCounter, ocrCmdCo
     // Note: reset player mode to 'test case', it will only be 'test suite'
     // during replays of test suites
     store.dispatch(act.setPlayerMode(C.PLAYER_MODE.TEST_CASE))
-    store.dispatch(Actions.updateTestSuite(extra.id, (ts) => {
-      return {
-        ...ts,
-        playStatus: {
-          ...ts.playStatus,
-          isPlaying: false,
-          currentIndex: -1
-        }
-      }
-    }))
 
     store.dispatch(act.updateUI({ shouldEnableDesktopAutomation: undefined }))
 
@@ -1038,16 +1057,6 @@ export const initTestSuitPlayer = ({store, vars, tcPlayer, xCmdCounter, ocrCmdCo
       break
 
       case Player.C.END_REASON.ERROR:
-      store.dispatch(Actions.updateTestSuite(state.tsId, (ts) => {
-        return {
-          ...ts,
-          playStatus: {
-            ...ts.playStatus,
-            errorIndices: ts.playStatus.errorIndices.concat([tsPlayer.state.nextIndex])
-          }
-        }
-      }))
-
       setState({
         stopReason: Player.C.END_REASON.ERROR
       })

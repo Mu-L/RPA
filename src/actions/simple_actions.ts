@@ -2,21 +2,17 @@ import React from 'react'
 import { Dispatch } from 'redux'
 import { message, Modal } from 'antd'
 import scrollIntoView from 'scroll-into-view-if-needed'
-import { objMap, until, pathsInNodeList, addInBetween, setIn, ancestorsInNodesList, updateIn, safeUpdateIn, normalizeHtmlId, flatternTree, flatten, delay, findNodeInTree, findNodeInForest, nodeByOffset, getExtName, resolvePath, clone } from '@/common/ts_utils'
-import { EntryNode, Entry, StandardStorage } from '@/services/storage/std/standard_storage'
+import { objMap, until, pathsInNodeList, addInBetween, setIn, ancestorsInNodesList, updateIn, safeUpdateIn, normalizeHtmlId, flatternTree, flatten, findNodeInTree, findNodeInForest, nodeByOffset, getExtName, resolvePath, clone } from '@/common/ts_utils'
+import { EntryNode, StandardStorage } from '@/services/storage/std/standard_storage'
 import { getStorageManager, StorageStrategyType, StorageManagerEvent } from '@/services/storage'
 import { compose } from '@/common/ts_utils'
 import { prompt } from '@/components/prompt'
 import log from '@/common/log'
 import storage from '../common/storage'
 import { saveEditingAsExisted,editTestCase, editNewTestCase, setMacrosExtra, findSamePathMacro, saveEditing, updateMacroPlayStatus, updateUI,selectCommand, copyCommand, cutCommand, pasteCommand, addLog, addTestCases, listCSV, listVisions } from './index'
-import { getCurrentMacroId, getMacroFileNodeData, getMacrosExtra, getTestSuitesWithAllInfo, getMacroFileNodeList, findMacroNodeWithCaseInsensitiveFullPath, getMacroFolderNodeList, getFilteredMacroFileNodeData, findMacroNodeWithCaseInsensitiveRelativePath, getShouldIgnoreTargetOptions } from '@/recomputed'
+import { getCurrentMacroId, getMacroFileNodeData, getMacrosExtra, getMacroFileNodeList, findMacroNodeWithCaseInsensitiveFullPath, getMacroFolderNodeList, getFilteredMacroFileNodeData, findMacroNodeWithCaseInsensitiveRelativePath, getShouldIgnoreTargetOptions } from '@/recomputed'
 import { FileNodeData, FileNodeType } from '@/components/tree_file'
 import { MacroExtraData } from '@/services/kv_data/macro_extra_data'
-import { TestSuite } from '@/common/convert_suite_utils'
-import { Updater, Tree } from '@/common/types'
-import { getTestSuiteExtraKeyValueData } from '@/services/kv_data/test_suite_extra_data'
-import { normalizeTestSuite } from '@/models/test_suite_model'
 import { uniqueName, sanitizeFileName, arrayBufferToString } from '@/common/utils'
 import globalConfig from '@/config'
 import { MacroCommand, Macro, toJSONString, toHtml, fromHtml, fromJSONString } from '@/common/convert_utils'
@@ -26,62 +22,10 @@ import { UNTITLED_ID } from '@/common/constant'
 import getSaveTestCase from '@/components/save_test_case'
 import FileSaver from '@/common/lib/file_saver'
 import { canCommandRunMacro, canCommandReadCsv, canCommandReadImage, parseImageTarget } from '@/common/command'
+import { STARTER_SCRIPT } from '@/config/preinstall_js_scripts'
 import JSZip from 'jszip'
 import { Command } from '@/services/player/macro'
 import config from '@/config'
-import { getLicenseService } from '@/services/license'
-
-export type GetMacroIdChangesOptions = {
-  entryPath:      string;
-  isDirectory:    boolean;
-  getNewFilePath: (oldFullPath: string) => string;
-}
-
-export function getMacroIdChanges (options: GetMacroIdChangesOptions): Promise<Record<string, string>> {
-  const { entryPath, isDirectory, getNewFilePath } = options
-  const macroStorage  = getStorageManager().getMacroStorage()
-  const entryFullPath = macroStorage.entryPath(entryPath, isDirectory)
-
-  if (!isDirectory) {
-    return Promise.resolve({
-      [entryFullPath]: getNewFilePath(entryFullPath)
-    })
-  }
-
-  return macroStorage.listR(entryFullPath)
-  .then((entryNodes) => {
-    const listOfNodes = entryNodes.map(node => flatternTree(node))
-    const nodes: Entry[] = flatten(listOfNodes)
-
-    return nodes
-    .map((node) => node.fullPath)
-    .reduce((prev, oldMacroPath) => {
-      prev[oldMacroPath] = getNewFilePath(oldMacroPath)
-      return prev
-    }, {} as Record<string, string>)
-  })
-}
-
-export type WithMacroIdChangesOptions = GetMacroIdChangesOptions & {
-  dispatch: Dispatch<any>,
-  run: () => Promise<void>
-}
-
-export function withMacroIdChanges (options: WithMacroIdChangesOptions) {
-  return getMacroIdChanges(options)
-  .then(macroIdChanges => {
-    return Promise.resolve(
-      options.run()
-    )
-    // Note: the delay is waiting for macro ids updated in state
-    .then(() => delay(() => {}, 1000))
-    .then(() => {
-      options.dispatch(
-        Actions.updateMacroIdsInTestSuites(macroIdChanges) as any
-      )
-    })
-  })
-}
 
 export type CheckNodeShowUpParams = {
   dispatch:    Dispatch<any>;
@@ -118,56 +62,8 @@ export function checkNodeShowUp (params: CheckNodeShowUpParams) {
     },
     (e) => {
       log.error(e);
-      fileFolderNotShown({
-        dispatch,
-        getState,
-        message
-      });
     }
   )
-}
-
-export type FileFolderNotShownParams = {
-  dispatch: Dispatch<any>;
-  getState: Function;
-  message:  string;
-}
-
-export function fileFolderNotShown (params: FileFolderNotShownParams) {
-  const { dispatch, getState, message } = params
-  const { config } = getState()
-  const { storageMode, xmodulesStatus = 'unregistered' } = config
-
-  if (storageMode !== StorageStrategyType.XFile) {
-    return
-  }
-
-  if (getLicenseService().isProLicense() || getLicenseService().isPlayerLicense()) {
-    return
-  }
-
-  const reason = (() => {
-    if (getLicenseService().hasNoLicense()) {
-      return `${getLicenseService().getMaxXFileMacros()} macro/folder limit in free version`
-    }
-
-    if (getLicenseService().isPersonalLicense()) {
-      return `${getLicenseService().getMaxXFileMacros()} macro/folder limit in Free Edition. Please use the PRO or ENTERPRISE Edition for unlimited direct file access.`
-    }
-
-    throw new Error('Unknown cases')
-  })()
-
-  Modal.warn({
-    title:   'Please upgrade your XModule plan',
-    content: `${message}, but not displayed due to ${reason}`,
-    okText:  'OK',
-    onOk: (): void => {
-      dispatch(
-        updateUI({ showSettings: true, settingsTab: 'register' })
-      )
-    }
-  })
 }
 
 export const ActionFactories = {
@@ -259,9 +155,6 @@ export const ActionFactories = {
   setMacroFolderStructure: (name: string) => (entryNodes: EntryNode[]) => {
     return createAction(name, entryNodes)
   },
-  setTestSuiteFolderStructure: (name: string) => (entryNodes: EntryNode[]) => {
-    return createAction(name, entryNodes)
-  },
   macroCreateFolder: (name: string) => (options: { name: string, dir: string }) => {
     return createThunkAction((dispatch, getState) => {
       const macroStorage = getStorageManager().getMacroStorage()
@@ -320,50 +213,12 @@ export const ActionFactories = {
     })
   },
   macroDeleteFolder: (name: string) => (options: { dir: string }) => {
-    // TODO: check if any macro is in use of some test suite
-
     return createThunkAction((dispatch, getState) => {
-      const { dir }             = options
-      const macroStorage        = getStorageManager().getMacroStorage()
-      const assertNoMacroInUse  = () => {
-        return getMacroIdChanges({
-          entryPath:      macroStorage.dirPath(dir),
-          isDirectory:    true,
-          getNewFilePath: (str) => str
-        })
-        .then(macroIdChanges => {
-          const state       = getState()
-          const testSuites  = getTestSuitesWithAllInfo(state)
-          const oldMacroIds = Object.keys(macroIdChanges)
-          const problems    = [] as Array<{ macroPath: string, testSuiteName: string }>
-
-          oldMacroIds.forEach((oldMacroId: string) => {
-            testSuites.forEach((ts) => {
-              if (ts.cases.find(obj => obj.testCaseId === oldMacroId)) {
-                problems.push({
-                  macroPath:     macroStorage.relativePath(oldMacroId),
-                  testSuiteName: ts.name
-                })
-              }
-            })
-          })
-
-          if (problems.length > 0) {
-            const cnt   = 3
-            const main  = problems.slice(0, cnt)
-                          .map(obj => `"${obj.macroPath}" is still used in test suite "${obj.testSuiteName}"`)
-                          .join('\n')
-            const extra = problems.length <= cnt ? '' : `\n...\n(And ${problems.length - 1} more macro references)`
-            const msg   = main + extra
-
-            throw new Error(msg)
-          }
-        })
-      }
+      const { dir }      = options
+      const macroStorage = getStorageManager().getMacroStorage()
 
       if (confirm(`Sure to delete ${dir} and all its content?`)) {
-        return assertNoMacroInUse()
-        .then(() => macroStorage.remove(dir, true))
+        return macroStorage.remove(dir, true)
         .catch((e: Error) => {
           Modal.warn({
             title:   'Failed to delete folder',
@@ -371,29 +226,14 @@ export const ActionFactories = {
             okText:  'OK'
           })
         })
-
       }
     })
   },
   macroMoveEntry: (name: string) => (data: {entryId: string, dirId: string, isSourceDirectory: boolean }) => {
     return createThunkAction((dispatch, getState) => {
-      const macroStorage      = getStorageManager().getMacroStorage()
-      const path              = macroStorage.getPathLib()
-      const getNewFilePath    = (oldMacroPath: string) => {
-        const dirName           = path.basename(data.entryId)
-        const oldDirFullPath    = macroStorage.dirPath(data.entryId)
-        const relativePath      = path.relative(oldMacroPath, oldDirFullPath)
-        return path.join(data.dirId, dirName, relativePath)
-      }
-      const moveEntry = () => macroStorage.move(data.entryId, data.dirId, data.isSourceDirectory, true)
+      const macroStorage = getStorageManager().getMacroStorage()
 
-      return withMacroIdChanges({
-        dispatch,
-        getNewFilePath,
-        run:          moveEntry,
-        entryPath:    data.entryId,
-        isDirectory:  data.isSourceDirectory
-      })
+      return macroStorage.move(data.entryId, data.dirId, data.isSourceDirectory, true)
       .catch((e: Error) => {
         message.error(e.message)
       })
@@ -407,8 +247,9 @@ export const ActionFactories = {
       const dirFullPath   = macroStorage.dirPath(dir)
       const folderName    = path.basename(dirFullPath)
       const parentDir     = path.dirname(dirFullPath)
-      const editingId     = getState().editor.editing.meta.src.id
-      const isEditingCur  = editingId.indexOf(dirFullPath + path.sep) === 0
+      const editingSrc    = getState().editor.editing.meta.src
+      const editingId     = editingSrc ? editingSrc.id : null
+      const isEditingCur  = !!editingId && editingId.indexOf(dirFullPath + path.sep) === 0
 
       return prompt({
         width: 400,
@@ -432,42 +273,31 @@ export const ActionFactories = {
               throw new Error(msg)
             }
 
-            return withMacroIdChanges({
-              dispatch,
-              isDirectory:    true,
-              entryPath:      dirFullPath,
-              getNewFilePath: (oldMacroPath: string) => {
-                const relativePath = path.relative(oldMacroPath, dirFullPath)
-                return path.join(newFullPath, relativePath)
+            return macroStorage.moveDirectory(dirFullPath, newFullPath)
+            .then(
+              () => {
+                message.success(`Renamed to '${newName}'`)
+
+                checkNodeShowUp({
+                  getState,
+                  dispatch,
+                  fullPath: newFullPath,
+                  switchToIt: false,
+                  message: 'Folder renamed'
+                })
+
+                if (isEditingCur) {
+                  const newMacroPath = editingId.replace(dirFullPath, newFullPath)
+                  dispatch(editTestCase(newMacroPath))
+                }
               },
-              run: () => {
-                return macroStorage.moveDirectory(dirFullPath, newFullPath)
-                .then(
-                  () => {
-                    message.success(`Renamed to '${newName}'`)
-
-                    checkNodeShowUp({
-                      getState,
-                      dispatch,
-                      fullPath: newFullPath,
-                      switchToIt: false,
-                      message: 'Folder renamed'
-                    })
-
-                    if (isEditingCur) {
-                      const newMacroPath = editingId.replace(dirFullPath, newFullPath)
-                      dispatch(editTestCase(newMacroPath))
-                    }
-                  },
-                  (e) => {
-                    log.error(e)
-                    const msg = 'Failed to rename: ' + e.message
-                    message.error(msg)
-                    throw new Error(msg)
-                  }
-                )
+              (e) => {
+                log.error(e)
+                const msg = 'Failed to rename: ' + e.message
+                message.error(msg)
+                throw new Error(msg)
               }
-            })
+            )
             .then(() => true)
           })
         }
@@ -492,26 +322,37 @@ export const ActionFactories = {
         cancelText: 'Cancel',
         onCancel: () => Promise.resolve(true),
         onOk: (macroName: string) => {
-          const filePath = path.join(dir, `${sanitizeFileName(macroName)}.json`)
+          // A new macro is always a JS script macro — .js name suffix (drives
+          // the tree badge) and the runnable starter script inside. Classic
+          // macros are still fully supported; they are just not what you get
+          // when you ask for a blank one.
+          const finalName = !/\.js$/i.test(macroName)
+            ? `${macroName}.js`
+            : macroName
+          // no explicit extension — storage.filePath() derives the file
+          // format from the name (*.js script macros save as plain .js
+          // files in file mode, .js.json envelopes stay a legacy read path)
+          const filePath = path.join(dir, sanitizeFileName(finalName))
           const fullPath = macroStorage.filePath(filePath)
 
           return macroStorage.fileExists(fullPath)
           .then(exists => {
             if (exists) {
-              const msg = `'${macroName}' already exists`
+              const msg = `'${finalName}' already exists`
               message.error(msg)
               throw new Error(msg)
             }
 
             return macroStorage.write(filePath, {
-              name: macroName,
+              name: finalName,
               data: {
-                commands: []
+                commands: [],
+                ...(isJsFirst ? { script: STARTER_SCRIPT } : {})
               }
             })
             .then(
               () => {
-                message.success(`Created macro '${macroName}'`)
+                message.success(`Created macro '${finalName}'`)
 
                 checkNodeShowUp({
                   getState,
@@ -577,133 +418,21 @@ export const ActionFactories = {
       scrollIfNeeded()
     })
   },
-  updateMacroIdsInTestSuites: (name: string) => (macroIdChanges: Record<string, string>) => {
-    return createThunkAction((dispatch, getState) => {
-      const state       = getState()
-      const testSuites  = getTestSuitesWithAllInfo(state)
-      const oldMacroIds = Object.keys(macroIdChanges)
-
-      oldMacroIds.forEach((oldMacroId: string) => {
-        const newMacroId = macroIdChanges[oldMacroId]
-         //dispatch(saveEditingAsExisted());
-        const state  = getState()
-        const { editing, isDraggingCommand } = state.editor
-        storage.set('editing', editing)
-        //document.querySelector('.select-case button').click()
-
-        testSuites.forEach((ts) => {
-          const indices = ts.cases.reduce((prev, obj, i) => {
-            if (obj.testCaseId === oldMacroId) {
-              prev.push(i)
-            }
-            return prev
-          }, [] as number[])
-
-          if (indices.length === 0) {
-            return
-          }
-
-          const cases = compose(
-            ...indices.map(i => setIn([i, 'testCaseId'], newMacroId))
-          )(ts.cases)
-
-          dispatch(
-            Actions.updateTestSuite(ts.id as any, { cases }) as any
-          )
-        })
-      })
-    })
-  },
-  updateTestSuite: (name: string) => (id: string, data: Partial<TestSuite> | Updater<Partial<TestSuite>>) => {
-    return createThunkAction((dispatch, getState) => {
-      const state       = getState()
-      const testSuites  = getTestSuitesWithAllInfo(state)
-      const ts          = testSuites.find(ts => ts.id === id)
-
-      if (!ts) {
-        return
-      }
-
-      const realData    = typeof data === 'function' ? data(ts) : data
-      const hasRename   = realData.name && ts.name !== realData.name
-
-      if (hasRename) {
-        const hasDuplciateName = !!testSuites.find(ts => ts.id !== id && ts.name === realData.name)
-
-        if (hasDuplciateName) {
-          return Promise.reject(new Error(`The test suite name '${realData.name}' already exists!`))
-        }
-      }
-
-      // Note: revised may contain `playStatus`
-      const revised   = {
-        ...ts,
-        ...realData
-      }
-
-      const suiteStorage  = getStorageManager().getTestSuiteStorage()
-      const suiteName     = hasRename ? realData.name : ts.name
-      const pRename       = hasRename ? suiteStorage.rename(ts.name, realData.name as string)
-                                      : Promise.resolve()
-      const pStoreExtra   = hasRename && getStorageManager().isXFileMode()
-                              ? getTestSuiteExtraKeyValueData()
-                                .set(id, {
-                                  fold:       false,
-                                  playStatus: {}
-                                })
-                              : getTestSuiteExtraKeyValueData()
-                                .set(id, {
-                                  fold:       revised.fold,
-                                  playStatus: revised.playStatus || {}
-                                })
-
-      dispatch({
-        type: name,
-        data: {
-          id: id,
-          updated: normalizeTestSuite(revised)
-        }
-      })
-
-      if (hasRename && getStorageManager().isXFileMode()) {
-        // Reset test suite status
-        dispatch({
-          type: 'UPDATE_TEST_SUITE_STATUS',
-          data: {
-            id,
-            extra: {
-              fold:       false,
-              playStatus: {}
-            }
-          }
-        })
-      } else {
-        dispatch({
-          type: 'UPDATE_TEST_SUITE_STATUS',
-          data: {
-            id,
-            extra: {
-              fold:       revised.fold,
-              playStatus: revised.playStatus || {}
-            }
-          }
-        })
-      }
-
-      return Promise.all([
-        pRename,
-        pStoreExtra
-      ])
-      .then(() => suiteStorage.write(suiteName as string, revised))
-    })
-  },
   renameTestCase: (name: string) => (newName: string, fullPath: string) => {
     return createThunkAction((dispatch, getState) => {
       const macroStorage = getStorageManager().getMacroStorage()
       const path      = macroStorage.getPathLib()
       const state     = getState()
-      const editingId = state.editor.editing.meta.src.id
-      const newPath   = macroStorage.filePath(path.join(path.dirname(fullPath), sanitizeFileName(newName)))
+      const editingSrc = state.editor.editing.meta.src
+      const editingId  = editingSrc ? editingSrc.id : null
+      // script macros keep their .js name suffix through a rename — the
+      // suffix is the macro's TYPE, and in file mode its on-disk format.
+      // (Renaming a legacy <name>.js.json this way migrates it to a plain
+      // .js file: the target gets the .js extension and the decoder unwraps
+      // the leftover JSON envelope on the next read.)
+      const isScriptMacro = /\.js(\.json)?$/i.test(path.basename(fullPath))
+      const finalNewName  = isScriptMacro && !/\.js$/i.test(newName) ? `${newName}.js` : newName
+      const newPath   = macroStorage.filePath(path.join(path.dirname(fullPath), sanitizeFileName(finalNewName)))
 
       return macroStorage.fileExists(fullPath)
       .then(exists => {
@@ -726,23 +455,13 @@ export const ActionFactories = {
           )
         }
 
-        return withMacroIdChanges({
-          dispatch,
-          entryPath:      fullPath,
-          isDirectory:    false,
-          getNewFilePath: (_: string) => newPath,
-          run: () => {
-            return getStorageManager()
-            .getMacroStorage()
-            .rename(fullPath, newPath)
-            .then(() => {
-              if (editingId === fullPath) {
-                dispatch({
-                  type: name,
-                  data: newName,
-                  post: saveEditing
-                })
-              }
+        return macroStorage.rename(fullPath, newPath)
+        .then(() => {
+          if (editingId === fullPath) {
+            dispatch({
+              type: name,
+              data: newName,
+              post: saveEditing
             })
           }
         })
@@ -769,15 +488,22 @@ export const ActionFactories = {
       const macroStorage = getStorageManager().getMacroStorage()
       const path         = macroStorage.getPathLib()
       const dirPath      = path.dirname(macro.fullPath)
-      const getNewPath   = (newName: string) => path.join(dirPath, `${newName}.json`)
+      // no explicit extension — storage.filePath() picks it from the name,
+      // so duplicating a *.js script macro yields another plain .js file
+      const getNewPath   = (newName: string) => path.join(dirPath, newName)
       const getNewName   = () => {
         return uniqueName(macro.name, {
           generate: (old, step = 1) => {
+            // the -N counter goes BEFORE a .js suffix ("Foo-1.js", not
+            // "Foo.js-1") — the suffix marks the macro type and, in file
+            // mode, decides the on-disk format
+            const jsExt = /\.js$/i.test(old) ? '.js' : ''
+            const base  = jsExt ? old.slice(0, -jsExt.length) : old
             const reg = /-(\d+)$/
-            const m   = old.match(reg)
+            const m   = base.match(reg)
 
-            if (!m) return `${old}-${step}`
-            return old.replace(reg, (_, n) => `-${parseInt(n, 10) + step}`)
+            const next = !m ? `${base}-${step}` : base.replace(reg, (_: string, n: string) => `-${parseInt(n, 10) + step}`)
+            return next + jsExt
           },
           check: (fileName) => {
             return macroStorage.fileExists(getNewPath(fileName)).then(exists => !exists)
@@ -1053,7 +779,8 @@ export const ActionFactories = {
       .then(content => {
         const macro = content as any as MacroInState;
         const downloadJson = (): void => {
-          const str = toJSONString({ name: macro.name, commands: macro.data.commands }, {
+          // script: keep JS script macros intact (undefined for table macros)
+          const str = toJSONString({ name: macro.name, commands: macro.data.commands, script: (macro.data as any).script } as any, {
             ignoreTargetOptions: getShouldIgnoreTargetOptions(getState())
           })
           const blob = new Blob([str], { type: 'text/plain;charset=utf-8' })
@@ -1198,7 +925,8 @@ export const ActionFactories = {
           .then(() => {
             zip.file(
               macroToSave.name + '.json',
-              toJSONString({ name: macroToSave.name, commands: macroToSave.data.commands })
+              // script: keep JS script macros intact (undefined for table macros)
+              toJSONString({ name: macroToSave.name, commands: macroToSave.data.commands, script: (macroToSave.data as any).script } as any)
             )
 
             if (isSubMacro) {

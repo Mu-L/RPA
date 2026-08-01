@@ -4,8 +4,7 @@ import { getBrowserFileSystemStandardStorage } from './std/browser_filesystem_st
 import { getNativeFileSystemStandardStorage } from './std/native_filesystem_storage'
 import { singletonGetter, forestSlice } from '../../common/ts_utils'
 import { getXFile } from '../xmodules/xfile'
-import { Macro, fromJSONString, toJSONString } from '../../common/convert_utils'
-import { stringifyTestSuite, parseTestSuite } from '../../common/convert_suite_utils'
+import { Macro, fromJSONString, toJSONString, fromJsFileText, toJsFileText } from '../../common/convert_utils'
 import { blobToDataURL } from '../../common/utils'
 import { StandardStorage, Entry, EntryNode, Content } from './std/standard_storage';
 import path from '@/common/lib/path';
@@ -19,7 +18,6 @@ export enum StorageStrategyType {
 
 export enum StorageTarget {
   Macro,
-  TestSuite,
   CSV,
   Screenshot,
   Vision
@@ -39,24 +37,18 @@ export interface IStorageManager {
 }
 
 export type StorageManagerOptions = {
-  getMacros: () => EntryNode[];
   getMaxMacroCount: (strategyType: StorageStrategyType) => Promise<number>;
   getConfig?: () => Record<string, any>;
 }
 
 export class StorageManager extends EventEmitter implements IStorageManager {
   private strategyType: StorageStrategyType = StorageStrategyType.Nil
-  private getMacros: (() => EntryNode[]) = () => []
   private getMaxMacroCount: ((strategyType: StorageStrategyType) => Promise<number>) = (s) => Promise.resolve(Infinity)
   private getConfig?: () => Record<string, any>;
 
   constructor (strategyType: StorageStrategyType, extraOptions?: StorageManagerOptions) {
     super()
     this.setCurrentStrategyType(strategyType)
-
-    if (extraOptions && extraOptions.getMacros) {
-      this.getMacros = extraOptions.getMacros
-    }
 
     if (extraOptions && extraOptions.getMaxMacroCount) {
       this.getMaxMacroCount = extraOptions.getMaxMacroCount
@@ -124,7 +116,10 @@ export class StorageManager extends EventEmitter implements IStorageManager {
                 } as any
               },
               encode: (data: any, fileName: string) => {
-                const str = toJSONString({ ...data, commands: data.data.commands }, {
+                // commands AND script live under data.data — hoist both;
+                // forgetting script here silently stripped the program from
+                // every saved JS script macro (toJSONString reads obj.script)
+                const str = toJSONString({ ...data, commands: data.data.commands, script: data.data.script }, {
                   withStatus: true,
                   ignoreTargetOptions: false //!!this.getConfig?.()?.saveAlternativeLocators
                 })
@@ -136,34 +131,6 @@ export class StorageManager extends EventEmitter implements IStorageManager {
 
             // FIXE: it's for test
             ;(window as any).newMacroStorage = storage
-
-            return storage
-          }
-
-          case StorageTarget.TestSuite: {
-            const storage = getBrowserFileSystemStandardStorage({
-              baseDir: 'testsuites',
-              extensions: ['json'],
-              shouldKeepExt: false,
-              decode: (text: string, filePath: string) => {
-                console.log('test suite raw content', filePath, text, this.getMacros())
-                const obj = parseTestSuite(text, { fileName: path.basename(filePath) })
-
-                // Note: use filePath as id
-                return {
-                  ...obj,
-                  id:   storage.filePath(filePath),
-                  path: storage.relativePath(filePath)
-                } as any
-              },
-              encode: (suite: any, fileName: string) => {
-                const str = stringifyTestSuite(suite)
-                return new Blob([str])
-              }
-            })
-
-            // FIXE: it's for test
-            ;(window as any).newTestSuiteStorage = storage
 
             return storage
           }
@@ -205,10 +172,17 @@ export class StorageManager extends EventEmitter implements IStorageManager {
 
         switch (target) {
           case StorageTarget.Macro: {
+            // JS script macros (names ending in .js) live on disk as PLAIN
+            // .js files — the file is the program, editable in any editor.
+            // Classic macros stay .json, and legacy <name>.js.json files
+            // (script wrapped in the JSON envelope) keep working: they list
+            // and decode as before, and in-place saves keep their envelope.
+            const isJsFile = (p: string) => /\.js$/i.test(p)
+
             const storage = getNativeFileSystemStandardStorage({
               rootDir,
               baseDir: 'macros',
-              extensions: ['json'],
+              extensions: ['json', 'js'],
               shouldKeepExt: false,
               listFilter: (entryNodes: EntryNode[]): Promise<EntryNode[]> => {
                 return this.getMaxMacroCount(this.strategyType)
@@ -217,7 +191,9 @@ export class StorageManager extends EventEmitter implements IStorageManager {
                 })
               },
               decode: (text: string, filePath: string) => {
-                const obj = fromJSONString(text, path.basename(filePath), { withStatus: true })
+                const obj = isJsFile(filePath)
+                  ? fromJsFileText(text, path.basename(filePath))
+                  : fromJSONString(text, path.basename(filePath), { withStatus: true })
 
                 // Note: use filePath as id
                 return {
@@ -227,34 +203,15 @@ export class StorageManager extends EventEmitter implements IStorageManager {
                 } as any
               },
               encode: (data: any, fileName: string) => {
-                const str = toJSONString({ ...data, commands: data.data.commands }, { withStatus: true, ignoreTargetOptions:false })
+                // the target FILE decides the format: *.js gets the raw
+                // program text (toJsFileText throws for a classic macro
+                // misnamed *.js), everything else the JSON envelope
+                const str = isJsFile(fileName)
+                  ? toJsFileText({ ...data, script: data.data.script })
+                  // hoist script alongside commands — see the browser-mode note
+                  : toJSONString({ ...data, commands: data.data.commands, script: data.data.script }, { withStatus: true, ignoreTargetOptions: false })
                 // Note: NativeFileSystemStorage only supports writing file with DataURL
                 // so have to convert it here in `encode`
-                return blobToDataURL(new Blob([str]))
-              }
-            })
-            return storage
-          }
-
-          case StorageTarget.TestSuite: {
-            const storage = getNativeFileSystemStandardStorage({
-              rootDir,
-              baseDir: 'testsuites',
-              extensions: ['json'],
-              shouldKeepExt: false,
-              decode: (text: string, filePath: string) => {
-                const obj = parseTestSuite(text, { fileName: path.basename(filePath) })
-
-                // Note: use filePath as id
-                return {
-                  ...obj,
-                  id:   storage.filePath(filePath),
-                  path: storage.relativePath(filePath)
-                } as any
-              },
-              encode: (suite: any, fileName: string) => {
-                const str = stringifyTestSuite(suite)
-
                 return blobToDataURL(new Blob([str]))
               }
             })
@@ -308,10 +265,6 @@ export class StorageManager extends EventEmitter implements IStorageManager {
     return this.getStorageForTarget(StorageTarget.Macro)
   }
 
-  getTestSuiteStorage (): StandardStorage {
-    return this.getStorageForTarget(StorageTarget.TestSuite)
-  }
-
   getCSVStorage (): StandardStorage & IWithLinkStorage {
     return <StandardStorage & IWithLinkStorage>this.getStorageForTarget(StorageTarget.CSV)
   }
@@ -337,9 +290,6 @@ function xFileDecodeImage (data: Content, fileName: string, readFileType: ReadFi
   return 'data:image/png;base64,' + (data as string)
 }
 
-// Note: in panel window (`src/index.js`), `getStorageManager` is provided with `getMacros` in `extraOptions`
-// While in `bg.js` or `csv_edtior.js`, `vision_editor.js`, `extraOptions` is omitted with no harm,
-// because they don't read/write test suites
 export const getStorageManager = singletonGetter((strategyType?: StorageStrategyType, extraOptions?: StorageManagerOptions) => {
   return new StorageManager(strategyType || StorageStrategyType.XFile, extraOptions)
 })

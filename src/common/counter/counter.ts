@@ -9,12 +9,11 @@ export class Counter implements ICounter {
   constructor (options: CounterOptions = {}) {
     const { initial, getMax, onMax } = options
 
-    if (typeof getMax !== 'function') throw new Error(`'getMax' function is required`)
-    if (typeof onMax !== 'function')  throw new Error(`onMax callback is required`)
-
+    // No ceiling by default: counters are mostly used to answer "how many so
+    // far" / "is this the first one". A limit is opt-in via getMax + onMax.
     this.initial  = initial || 0
-    this.getMax   = getMax
-    this.onMax    = onMax
+    this.getMax   = typeof getMax === 'function' ? getMax : () => Infinity
+    this.onMax    = typeof onMax === 'function' ? onMax : () => {}
 
     this.reset()
   }
@@ -54,3 +53,7 @@ export class Counter implements ICounter {
     }
   }
 }
+
+// Explicit name for "counts, never refuses" at the call site. Same as Counter
+// with no getMax — the subclass exists so the intent is readable.
+export class UnlimitedCounter extends Counter {}

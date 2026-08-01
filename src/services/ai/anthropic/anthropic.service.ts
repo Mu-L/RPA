@@ -3,7 +3,6 @@ import { MessageParam } from '@anthropic-ai/sdk/resources'
 // import sharp, { Metadata } from 'sharp'
 
 import { ANTHROPIC } from '@/common/constant'
-import { Jimp } from 'jimp'
 
 interface Coordinates {
   coords: Array<{ x: number; y: number }>
@@ -149,6 +148,8 @@ class AnthropicService {
   // ** Using Jimp
   async scaleImageIfNeeded(imageBuffer: ArrayBuffer): Promise<ScaleImageIfNeededResult> {
     //API accepts only 1280x800 max!!!
+    // Lazy-load jimp (~700 KB) so it stays out of the eager panel bundle
+    const { Jimp } = await import('jimp')
     const image = await Jimp.read(imageBuffer)
 
     // const metadata = (await image.metadata()) as Omit<Metadata, 'width' | 'height'> & { width: number; height: number }
@@ -324,6 +325,8 @@ class AnthropicService {
 
   async aiScreenXYProcessImage(imageBuffer: ArrayBuffer, promptText: string): Promise<ProcessImageResult> {
     try {
+      // Lazy-load jimp (~700 KB) so it stays out of the eager panel bundle
+      const { Jimp } = await import('jimp')
       const image = await Jimp.read(imageBuffer)
 
       const metadata = {

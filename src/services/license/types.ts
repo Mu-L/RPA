@@ -51,8 +51,4 @@ export interface ILicenseService {
   isProLicense (): boolean;
   getEditionName (): string;
   getUpgradeUrl (): string;
-  getMaxOcrCalls (): number;
-  getMaxXCommandCalls (): number;
-  getMaxProxyCalls (): number;
-  getMaxXFileMacros (): number;
 }

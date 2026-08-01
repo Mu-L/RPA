@@ -12,9 +12,10 @@ import { backup } from '../services/backup/backup'
 import log from '../common/log'
 import { fromJSONString } from '../common/convert_utils'
 import config from '../config'
-import preTcs from '../config/preinstall_macros'
+import { CLASSIC_PREINSTALL, JS_PREINSTALL } from '../config/preinstall_macros'
+import { WELCOME_SCRIPT, STAR_SCRIPT, CAT_SCRIPT } from '../config/preinstall_js_scripts'
 import { getMacroExtraKeyValueData } from '../services/kv_data/macro_extra_data'
-import { getTestSuitesWithAllInfo, getBreakpoints, getBreakpointsByMacroId, getCurrentMacroId, getErrorCommandIndices, getWarningCommandIndices, getMacrosExtra, getMacroFileNodeList, hasUnsavedMacro } from '../recomputed'
+import { getBreakpoints, getBreakpointsByMacroId, getCurrentMacroId, getErrorCommandIndices, getWarningCommandIndices, getMacrosExtra, getMacroFileNodeList, hasUnsavedMacro } from '../recomputed'
 import { prompt } from '../components/prompt'
 import { isValidCmd } from '../common/command'
 import { getMacroCallStack } from '../services/player/call_stack/call_stack'
@@ -130,10 +131,6 @@ export function findMacrosInFolder (folderPath, macroNodes) {
 
     return true
   })
-}
-
-export function findSameNameTestSuite (name, testSuites) {
-  return testSuites.find(ts => toLower(ts.name) === toLower(name))
 }
 
 export function setRoute (data) {
@@ -264,6 +261,17 @@ export function updateCommand (cmdObj, index) {
       command: normalizeCommand(cmdObj),
       index: index
     },
+    post: saveEditing
+  }
+}
+
+// JS script macros: replace the program text of the macro being edited
+// (the script's counterpart of updateCommand — same unsaved tracking and
+// editing persistence)
+export function updateEditingScript (script) {
+  return {
+    type: T.UPDATE_SCRIPT,
+    data: { script },
     post: saveEditing
   }
 }
@@ -435,7 +443,8 @@ export function saveEditingAsExisted () {
     const state   = getState()
     const src     = state.editor.editing.meta.src
     const macroId = src.id
-    const data    = pick(['commands'], state.editor.editing)
+    // 'script': JS script macros carry their program here (V11 prototype)
+    const data    = pick(['commands', 'script'], state.editor.editing)
     const macroStorage = getStorageManager().getMacroStorage()
 
     if (!macroId) {
@@ -474,23 +483,37 @@ export function saveEditingAsExisted () {
 }
 
 // In the form of redux-thunnk, it saves the current editing test case as a new named test case
-export function saveEditingAsNew (name) {
+export function saveEditingAsNew (name, dir = '/') {
   return (dispatch, getState) => {
     const state = getState()
-    const data  = pick(['commands'], state.editor.editing)
+    // 'script': JS script macros carry their program here (V11 prototype)
+    const data  = pick(['commands', 'script'], state.editor.editing)
+
+    // script macros always get the .js name suffix — it marks the macro type
+    // in the tree (JS badge); users typing a plain name in "Save as.." should
+    // not lose it
+    if (typeof data.script === 'string' && !/\.js$/i.test(name)) {
+      name = `${name}.js`
+    }
+
     const sameName = findSameNameMacro(name, state.editor.testCases)
 
     if (sameName) {
       return Promise.reject(new Error('The macro name already exists!'))
     }
 
-    const relativePath = '/' + name + '.json'
-    const id = getStorageManager().getMacroStorage().filePath(relativePath)
+    // optional target folder (e.g. '/AI' for macros created by the AI agent).
+    const dirPath = dir === '/' ? '' : '/' + dir.replace(/^\/+|\/+$/g, '')
+    // No explicit extension: the storage's filePath() picks the file format
+    // from the name — *.js script macros become plain .js files in file mode,
+    // everything else gets .json appended (both modes)
+    const relativePath = dirPath + '/' + name
+    const macroStorage = getStorageManager().getMacroStorage()
+    const id = macroStorage.filePath(relativePath)
     const newMacro = { id, name, data }
 
-    return getStorageManager()
-    .getMacroStorage()
-    .write(relativePath, newMacro)
+    return (dirPath ? macroStorage.ensureDirectory(dirPath) : Promise.resolve())
+    .then(() => macroStorage.write(relativePath, newMacro))
     .then(() => {
       dispatch({
         type: 'setCurrentMacro',
@@ -533,6 +556,20 @@ export function setTestCases (testCases) {
 
       if (shouldSelectDefault) {
         dispatch(editTestCase(macroNodes[0].fullPath))
+        return
+      }
+
+      // The macro open in the editor may just have been deleted (e.g. its
+      // folder removed in the IDE window while the side panel shows it).
+      // Reset to the default selection instead of keeping a ghost editor —
+      // but only on a DOUBLE signal (missing from the fresh list AND the
+      // storage read fails) so a transient read hiccup never wipes the editor.
+      const src = state.editor.editing.meta.src
+      if (src && src.id && !macroNodes.some(node =>
+        node.fullPath && node.fullPath.toLowerCase() === String(src.id).toLowerCase()
+      )) {
+        getStorageManager().getMacroStorage().read(src.id, 'Text')
+        .catch(() => dispatch(resetEditing()))
       }
     }
   }
@@ -561,7 +598,12 @@ export function resetEditingIfNeeded () {
     const lastTcId = editing.meta.src && editing.meta.src.id
 
     if (!lastTcId)  return resetEditing()(dispatch, getState)
-    dispatch(editTestCase(lastTcId))
+    // The last edited macro may be gone (deleted or renamed outside this
+    // panel, e.g. its folder removed in the IDE window). Without the catch
+    // the failed read leaves the restored editing snapshot on screen as a
+    // ghost macro with a dead Play button.
+    return Promise.resolve(dispatch(editTestCase(lastTcId)))
+    .catch(() => resetEditing()(dispatch, getState))
   }
 }
 
@@ -671,7 +713,9 @@ export function addTestCases ({ macros, folder = '/', overwrite = false, storage
     }
 
     const macrosToWrite = validTcs.map(tc => ({
-      filePath: path.join(folder, `${tc.name}.json`),
+      // no explicit extension — storage.filePath() derives the file format
+      // from the name (*.js script macros save as plain .js in file mode)
+      filePath: path.join(folder, tc.name),
       content: {
         ...tc,
         id: uid(),
@@ -689,13 +733,14 @@ export function removeTestCase (macroId) {
   return (dispatch, getState) => {
     const state = getState()
     const curId = state.editor.editing.meta.src && state.editor.editing.meta.src.id
-    const tss   = state.editor.testSuites.filter(ts => {
-      return ts.cases.find(m => m.testCaseId === macroId)
-    })
 
-    if (tss.length > 0) {
-      return Promise.reject(new Error(`Can't delete this macro for now, it's currently used in following test suites: ${tss.map(item => item.name)}`))
-    }
+    // Id formats drift for the SAME file (tree fullPath vs stored macro id:
+    // case, back/forward slashes, .json suffix) — compare normalized, like
+    // findMacroNodeWithCaseInsensitiveField does. A strict === misses the
+    // match, isCurrent stays false, and deleting the open macro in the Files
+    // tab leaves a ghost editor on the Macro tab.
+    const norm = (p) => String(p).toLowerCase().replace(/\\/g, '/').replace(/\.json$/i, '')
+    const isCurrent = !!curId && norm(curId) === norm(macroId)
 
     // Reset test case status
     dispatch(
@@ -709,7 +754,7 @@ export function removeTestCase (macroId) {
       dispatch({
         type: T.REMOVE_TEST_CASE,
         data: {
-          isCurrent: curId === macroId
+          isCurrent
         },
         post: saveEditing
       })
@@ -872,6 +917,18 @@ export function updateConfig (data) {
   }
 }
 
+// Apply config that was just READ FROM STORAGE (storage.onChanged sync).
+// Deliberately has no post: saveConfig — writing back what we read would
+// clobber keys other pages changed (each page writes its FULL config object),
+// and the resulting write ping-pong is why settings sometimes stayed stale
+// until the side panel was reopened.
+export function updateConfigFromStorage (data) {
+  return {
+    type: T.UPDATE_CONFIG,
+    data: data
+  }
+}
+
 export function setMacrosExtra (data, options = {}) {
   const opts = {
     shouldPersist: false,
@@ -882,13 +939,6 @@ export function setMacrosExtra (data, options = {}) {
     type: T.SET_MACROS_EXTRA,
     data: data || {},
     post: opts.shouldPersist ? saveWholeMacrosExtra : () => {}
-  }
-}
-
-export function setTestSuitesExtra (data) {
-  return {
-    type: T.SET_TEST_SUITES_EXTRA,
-    data: data || {}
   }
 }
 
@@ -1019,7 +1069,9 @@ export function playerPlay (options) {
       autoSaveExisting: true
     })
     .then(saved => {
-      if (!saved) return
+      // `false` tells the caller WHY nothing ran — the script runner turns a
+      // silent no-start into a 10s stall and a generic E902 otherwise
+      if (!saved) return false
 
       const state       = getState()
       const playerState = commonPlayerState(state, opts, opts.macroId, opts.title)
@@ -1035,7 +1087,7 @@ export function playerPlay (options) {
         status:           MacroStatus.Running,
         nextIndex:        opts.startIndex,
         commandResults:   []
-      })
+      }).then(() => true)
     })
   }
 }
@@ -1196,92 +1248,6 @@ export function renameVisionImage (fileName, shouldUpdateCommand = true) {
   }
 }
 
-export function setTestSuites (tss) {
-  return {
-    type: T.SET_TEST_SUITES,
-    data: tss
-  }
-}
-
-export function addTestSuite (ts) {
-  return (dispatch, getState) => {
-    const state = getState()
-    const existingtestSuites  = getTestSuitesWithAllInfo(state)
-    const hasDuplicateName    = !!existingtestSuites.find(item => ts.name === item.name)
-
-    if (hasDuplicateName) {
-      return Promise.reject(new Error(`The test suite name '${ts.name}' already exists!`))
-    }
-
-    return getStorageManager()
-    .getTestSuiteStorage()
-    .write(ts.name, {
-      ...ts,
-      id: uid(),
-      updateTime: new Date() * 1
-    })
-  }
-}
-
-export function addTestSuites (tss, storageStrategyType = null) {
-  return (dispatch, getState) => {
-    const state = getState()
-    const existingtestSuites = getTestSuitesWithAllInfo(state)
-
-    const validTss  = tss.filter(ts => !existingtestSuites.find(item => item.name === ts.name))
-    const passCount = validTss.length
-    const failCount = tss.length - passCount
-
-    if (passCount === 0) {
-      return Promise.resolve({ passCount, failCount, failTss: [] })
-    }
-
-    const storage = getStorageManager()
-                    .getStorageForTarget(
-                      StorageTarget.TestSuite, storageStrategyType ||
-                      getStorageManager().getCurrentStrategyType()
-                    )
-
-    const testSuitesToWrite = validTss.map(ts => ({
-      filePath: ts.name,
-      content: {
-        ...ts,
-        id: uid(),
-        updateTime: new Date() * 1
-      }
-    }))
-
-    return storage.ensureDir()
-    .then(() => storage.bulkWrite(testSuitesToWrite))
-    .then(() => ({ passCount, failCount, failTss: [] }))
-  }
-}
-
-export function removeTestSuite (id) {
-  return (dispatch, getState) => {
-    const state = getState()
-    const ts = state.editor.testSuites.find(ts => ts.id === id)
-
-    if (!ts) throw new Error(`can't find test suite with id '${id}'`)
-
-    // Reset test suite status
-    dispatch({
-      type: T.UPDATE_TEST_SUITE_STATUS,
-      data: {
-        id,
-        extra: {
-          fold:       false,
-          playStatus: {}
-        }
-      }
-    })
-
-    return getStorageManager()
-    .getTestSuiteStorage()
-    .remove(ts.name)
-  }
-}
-
 export function setPlayerMode (mode) {
   return {
     type: T.SET_PLAYER_STATE,
@@ -1292,10 +1258,9 @@ export function setPlayerMode (mode) {
 export function runBackup () {
   return (dispatch, getState) => {
     const state = getState()
-    const { config, editor } = state
+    const { config } = state
     const {
       autoBackupTestCases,
-      autoBackupTestSuites,
       autoBackupScreenshots,
       autoBackupCSVFiles,
       autoBackupVisionImages
@@ -1309,23 +1274,34 @@ export function runBackup () {
       sm.getVisionStorage().list()
     ])
     .then(([csvs, screenshots, visions]) => {
+      const macroNodes = getMacroFileNodeList(state)
+
       return backup({
         csvs,
         screenshots,
         visions,
-        macroNodes: getMacroFileNodeList(state),
-        testSuites: editor.testSuites,
+        macroNodes,
         backup: {
           testCase: autoBackupTestCases,
-          testSuite: autoBackupTestSuites,
           screenshot: autoBackupScreenshots,
           csv: autoBackupCSVFiles,
           vision: autoBackupVisionImages
         }
       })
+      // report what went into the ZIP so callers can tell the user something
+      // more useful than "done" — and so an EMPTY backup is visible as such
+      .then(() => ({
+        macro: macroNodes.length,
+        csv: csvs.length,
+        screenshot: screenshots.length,
+        vision: visions.length
+      }))
     })
+    // errors must reach the caller: the settings page shows them. Logging and
+    // swallowing was why "Run Backup Now" could look like it did nothing.
     .catch(e => {
       log.error(e.stack)
+      throw e
     })
   }
 }
@@ -1383,131 +1359,160 @@ export function setEditorActiveTab (tab) {
   }
 }
 
-export function preinstall (yesInstall = true) {
-  return (dispatch, getState) => {
-    const markThisVersion = () => {
-      return storage.get('preinstall_info')
-      .then((info = {}) => {
-        const prevVersions = info.askedVersions || []
-        const thisVersion  = config.preinstall.version
-        const hasThisOne   = prevVersions.indexOf(thisVersion) !== -1
+// write one { relativePath: macroJSON } map below the preinstall folder —
+// shared by preinstall() and restoreDemoMacros(); existing files with the
+// same path are overwritten, everything else in the tree is left alone
+function writePreinstallMacroSet (preTcs) {
+  if (!preTcs || !Object.keys(preTcs).length)  return Promise.resolve()
 
-        if (hasThisOne) return true
+  const macroStorage = getStorageManager().getMacroStorage()
+  const path = macroStorage.getPathLib()
+  const folders = Object.keys(preTcs).map(relativePath => {
+    return path.join(
+      config.preinstall.macroFolder,
+      path.dirname(relativePath)
+    )
+  })
+  const uniqueFolders = uniqueStrings(...folders)
 
-        return storage.set('preinstall_info', {
-          ...info,
-          askedVersions: [...prevVersions, thisVersion]
-        })
+  return flow(
+    ...uniqueFolders.map(dirPath => () => macroStorage.ensureDirectory(dirPath))
+  )
+  .then(() => {
+    return Promise.all(
+      Object.keys(preTcs).map(relativePath => {
+        const macroName = path.basename(relativePath)
+        const filePath  = macroStorage.filePath(
+          path.join(
+            config.preinstall.macroFolder,
+            relativePath
+          )
+        )
+        const str   = JSON.stringify(preTcs[relativePath])
+        const macro = fromJSONString(str, macroName)
+
+        // file mode migration: a JS demo now restores as a plain .js file —
+        // its pre-existing <name>.js.json envelope would live on next to it
+        // as a duplicate tree entry, so remove the legacy twin first.
+        // (Browser mode never gets here with a .js filePath: its storage
+        // appends .json to the resolved path.)
+        const legacyTwin = /\.js$/i.test(filePath) ? `${filePath}.json` : null
+        const removeLegacy = () => {
+          if (!legacyTwin) return Promise.resolve()
+          return macroStorage.fileExists(legacyTwin)
+          .then(exists => exists ? macroStorage.removeFile(legacyTwin) : undefined)
+        }
+
+        return removeLegacy().then(() => macroStorage.write(filePath, macro))
       })
-    }
+    )
+  })
+}
 
-    if (!yesInstall)  return markThisVersion()
+// Demo CSV files — installed into the CURRENT storage mode, same as the
+// macros themselves: forcing these into browser storage left file-mode
+// installs with demo macros on disk whose csv/vision resources did not
+// exist where the commands actually read them
+function installPreinstallCsvs (dispatch) {
+  const list = PREINSTALL_CSV_LIST
+  if (list.length === 0)  return Promise.resolve()
 
+  const csvStorage  = getStorageManager().getCSVStorage()
+
+  return csvStorage.ensureDir()
+  .then(() => {
+    const ps          = list.map(url => {
+      const parts     = url.split('/')
+      const fileName  = parts[parts.length - 1]
+
+      return loadCsv(url)
+      .then(text => {
+        return csvStorage.write(fileName, new Blob([text]))
+      })
+    })
+
+    return Promise.resolve(ps)
+    // Note: delay needed for Firefox and slow Chrome
+    .then(() => delay(() => {}, 3000))
+    .then(() => {
+      dispatch(listCSV())
+    })
+  })
+}
+
+// Demo vision images — current storage mode, see the csv note above
+function installPreinstallVisionImages (dispatch) {
+  const list = PREINSTALL_VISION_LIST
+  if (list.length === 0)  return Promise.resolve()
+
+  const visionStorage   = getStorageManager().getVisionStorage()
+
+  return visionStorage.ensureDir()
+  .then(() => {
+    const ps              = list.map(url => {
+      const parts     = url.split('/')
+      const fileName  = parts[parts.length - 1]
+
+      return loadImage(url)
+      .then(blob => {
+        return visionStorage.write(fileName, blob)
+      })
+    })
+
+    return Promise.resolve(ps)
+    // Note: delay needed for Firefox and slow Chrome
+    .then(() => delay(() => {}, 3000))
+    .then(() => {
+      dispatch(listVisions())
+    })
+  })
+}
+
+// The three macros a FRESH INSTALL starts with: the welcome tour, the
+// GitHub star macro and the cat drawing demo, at the tree root where they
+// cannot be missed. Everything
+// else (the full demo/QA sets) stays out of a new install and arrives via
+// restoreDemoMacros below.
+export function installWelcomeMacro () {
+  return () => {
+    return writePreinstallMacroSet({
+      'A short welcome tour.js': {
+        CreationDate: '2026-07-29',
+        Commands: [],
+        Script: WELCOME_SCRIPT
+      },
+      // fullwidth ？ on purpose: the ASCII ? is illegal in Windows file
+      // names (macros are real files in hard-drive storage mode) and
+      // sanitizeFileName strips it
+      'Like Ui.Vision？Give us a star 🌟.js': {
+        CreationDate: '2026-07-29',
+        Commands: [],
+        Script: STAR_SCRIPT
+      },
+      'Draw a cat🐱.js': {
+        CreationDate: '2026-07-30',
+        Commands: [],
+        Script: CAT_SCRIPT
+      }
+    })
+  }
+}
+
+// Settings > General, "For Tech Support/QA": write ONE demo set in its
+// shipped state — deleted demos come back, edited ones are overwritten,
+// the user's own macros are untouched. Demos are NOT auto-installed on
+// install/update anymore, so these buttons are the only road the demo
+// macros AND their csv/vision resources arrive by — hence both are
+// (re)installed here.
+export function restoreDemoMacros (kind /* 'js' | 'classic' */) {
+  return (dispatch) => {
     log('PREINSTALL_CSV_LIST', PREINSTALL_CSV_LIST)
     log('PREINSTALL_VISION_LIST', PREINSTALL_VISION_LIST)
 
-    const installMacrosAndSuites = () => {
-      if (!preTcs || !Object.keys(preTcs).length)  return Promise.resolve()
-
-      const installMacros = () => {
-        const macroStorage = getStorageManager().getMacroStorage()
-        const path = macroStorage.getPathLib()
-        const folders = Object.keys(preTcs).map(relativePath => {
-          return path.join(
-            config.preinstall.macroFolder,
-            path.dirname(relativePath)
-          )
-        })
-        const uniqueFolders = uniqueStrings(...folders)
-
-        return flow(
-          ...uniqueFolders.map(dirPath => () => macroStorage.ensureDirectory(dirPath))
-        )
-        .then(() => {
-          return Promise.all(
-            Object.keys(preTcs).map(relativePath => {
-              const macroName = path.basename(relativePath)
-              const filePath  = macroStorage.filePath(
-                path.join(
-                  config.preinstall.macroFolder,
-                  relativePath
-                )
-              )
-              const str   = JSON.stringify(preTcs[relativePath])
-              const macro = fromJSONString(str, macroName)
-
-              return macroStorage.write(filePath, macro)
-            })
-          )
-        })
-      }
-
-      return flow(installMacros)
-    }
-
-    // Preinstall csv
-    const installCsvs = () => {
-      const list = PREINSTALL_CSV_LIST
-      if (list.length === 0)  return Promise.resolve()
-
-      // Note: preinstalled resources all go into browser mode
-      const csvStorage  = getStorageManager().getStorageForTarget(StorageTarget.CSV, StorageStrategyType.Browser)
-
-      return csvStorage.ensureDir()
-      .then(() => {
-        const ps          = list.map(url => {
-          const parts     = url.split('/')
-          const fileName  = parts[parts.length - 1]
-
-          return loadCsv(url)
-          .then(text => {
-            return csvStorage.write(fileName, new Blob([text]))
-          })
-        })
-
-        return Promise.resolve(ps)
-        // Note: delay needed for Firefox and slow Chrome
-        .then(() => delay(() => {}, 3000))
-        .then(() => {
-          dispatch(listCSV())
-        })
-      })
-    }
-
-    // Preinstall vision images
-    const installVisionImages = () => {
-      const list = PREINSTALL_VISION_LIST
-      if (list.length === 0)  return Promise.resolve()
-
-      // Note: preinstalled resources all go into browser mode
-      const visionStorage   = getStorageManager().getStorageForTarget(StorageTarget.Vision, StorageStrategyType.Browser)
-
-      return visionStorage.ensureDir()
-      .then(() => {
-        const ps              = list.map(url => {
-          const parts     = url.split('/')
-          const fileName  = parts[parts.length - 1]
-
-          return loadImage(url)
-          .then(blob => {
-            return visionStorage.write(fileName, blob)
-          })
-        })
-
-        return Promise.resolve(ps)
-        // Note: delay needed for Firefox and slow Chrome
-        .then(() => delay(() => {}, 3000))
-        .then(() => {
-          dispatch(listVisions())
-        })
-      })
-    }
-
     return Promise.all([
-      installMacrosAndSuites(),
-      installCsvs(),
-      installVisionImages()
+      writePreinstallMacroSet(kind === 'classic' ? CLASSIC_PREINSTALL : JS_PREINSTALL),
+      installPreinstallCsvs(dispatch),
+      installPreinstallVisionImages(dispatch)
     ])
-    .then(markThisVersion)
   }
 }

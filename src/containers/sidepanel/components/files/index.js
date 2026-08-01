@@ -1,4 +1,4 @@
-import { FolderAddOutlined } from '@ant-design/icons';
+import { FolderAddOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Button, Dropdown, Input, Modal, message } from 'antd';
 import JSZip from 'jszip';
 import keycode from 'keycode';
@@ -8,10 +8,14 @@ import { bindActionCreators } from 'redux';
 
 import * as actions from '@/actions';
 import { Actions as simpleActions } from '@/actions/simple_actions';
+import { createBookmarkOnBar } from '@/common/bookmark';
 import * as C from '@/common/constant';
 import {
+  toBookmarkData,
   toJSONString
 } from '@/common/convert_utils';
+import log from '@/common/log';
+import { uid } from '@/common/ts_utils';
 import FileSaver from '@/common/lib/file_saver';
 import M from '@/common/messages';
 import { getPlayer } from '@/common/player';
@@ -22,6 +26,7 @@ import getSaveTestCase from '@/components/save_test_case';
 import { FileNodeType, FileTree } from '@/components/tree_file';
 import config from '@/config';
 import { getActiveTabId, showPanelWindow } from '@/ext/common/tab';
+import { isScriptRunning, runScript } from '@/modules/script_runner';
 import {
   getFilteredMacroFileNodeData,
   getMacroFileNodeData,
@@ -35,7 +40,7 @@ import {
 import { RunBy } from '@/reducers/state';
 import { getLicenseService } from '@/services/license';
 import { Feature } from '@/services/license/types';
-import { getStorageManager } from '@/services/storage';
+import { StorageManagerEvent, StorageStrategyType, StorageTarget, getStorageManager } from '@/services/storage';
 import { delayMs } from '../../../../common/utils';
 import { ResourceNotLoaded } from '../../../common/resource_not_loaded';
 
@@ -91,7 +96,13 @@ class Files extends React.Component {
 
   changeTestCase = (id) => {
     return new Promise((resolve) => {
-      if (this.props.status !== C.APP_STATUS.NORMAL)  return resolve(false)
+      // A JS script drives the player ONE COMMAND AT A TIME, so props.status
+      // is PLAYER during a uiv.* call and back to NORMAL in the gaps between
+      // them. Checking status alone therefore lets a macro be swapped mid-run
+      // whenever the click lands in one of those gaps — the run keeps playing
+      // a macro the editor no longer holds. isScriptRunning is true for the
+      // whole script, gaps included.
+      if (this.props.status !== C.APP_STATUS.NORMAL || isScriptRunning())  return resolve(false)
       if (this.props.editing.meta.src && this.props.editing.meta.src.id === id) return resolve(true)
 
       const go = () => {
@@ -116,6 +127,14 @@ class Files extends React.Component {
       if (!shouldPlay)  return
 
       setTimeout(() => {
+        // JS script macro: run it through the interpreter, not the player
+        if (typeof this.props.editing.script === 'string') {
+          runScript(this.props.editing.script).catch(e => {
+            message.error(`Script failed to start: ${(e && e.message) || e}`, 3)
+          })
+          return
+        }
+
         const { commands } = this.props.editing
         const openTc  = commands.find(item => item.cmd.toLowerCase() === 'open')
         const { src } = this.props.editing.meta
@@ -215,6 +234,18 @@ class Files extends React.Component {
         return
       }
 
+      // Never steal keys from a text field. This listener is on the DOCUMENT
+      // in the CAPTURE phase, so without this check it wins over whatever the
+      // user is actually typing in — a CodeMirror editor, a rename box, the AI
+      // chat input — and up/down jumps to another macro mid-edit.
+      const el = e.target
+      const tag = el && el.tagName ? el.tagName.toLowerCase() : ''
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' ||
+          (el && el.isContentEditable) || (el && el.closest && el.closest('.CodeMirror'))) {
+        return
+      }
+
+
       switch (keycode(e)) {
         case 'up':
           e.preventDefault()
@@ -235,6 +266,22 @@ class Files extends React.Component {
 
     if (this.props.isLoadingMacros && this.props.isMacroFolderNodeListEmpty) {
       return <div className="no-data">Loading macros...</div>
+    }
+
+    // brand-new install (no macros at all, no filter): point to the AI-first
+    // flow. A filter with no hits keeps the plain "No macro found" below.
+    if (this.props.isMacroFolderNodeListEmpty && filteredMacroFileNodeData.length === 0) {
+      return (
+        <div className="files-empty-cta">
+          <p className="cta-title">No macros yet</p>
+          <p className="cta-text">
+            Describe what you want in AI Chat — the AI builds the macro for you and saves it here.
+          </p>
+          <Button type="primary" onClick={() => this.props.updateUI({ sidebarTab: 'AiChat' })}>
+            Open AI Chat ✨
+          </Button>
+        </div>
+      )
     }
 
     return (
@@ -512,6 +559,35 @@ class Files extends React.Component {
           }
         },
         {
+          type: MenuItemType.Divider,
+          data: {}
+        },
+        {
+          type: MenuItemType.Button,
+          data: {
+            content: 'Edit (in sidebar)',
+            onClick: () => {
+              // open the macro in the side panel Macro tab
+              this.changeTestCase(macroNode.fullPath).then(() => {
+                this.props.updateUI({ sidebarTab: 'Macro' })
+              })
+            }
+          }
+        },
+        {
+          type: MenuItemType.Button,
+          data: {
+            content: 'Edit (in IDE)',
+            onClick: () => {
+              this.onClickEditInIDE(macroNode.fullPath)
+            }
+          }
+        },
+        {
+          type: MenuItemType.Divider,
+          data: {}
+        },
+        {
           type: MenuItemType.Button,
           data: {
             content: 'Rename..',
@@ -538,18 +614,92 @@ class Files extends React.Component {
           }
         },
         {
-          type: MenuItemType.Divider,
-          data: {}
+          type: MenuItemType.Button,
+          data: {
+            content: 'Export as JSON',
+            onClick: () => {
+              this.props.downloadMacroAsJson(macroNode.fullPath)
+            }
+          }
         },
         {
           type: MenuItemType.Button,
           data: {
-            content: 'Edit (in IDE)',
+            content: 'Export as ZIP (json, img & csv)',
             onClick: () => {
-              this.onClickEditInIDE(macroNode.fullPath)
+              this.props.downloadMacroAsZip(macroNode.fullPath)
             }
           }
         },
+        {
+          type: MenuItemType.Button,
+          data: {
+            content: 'Add shortcut to bookmarks bar',
+            onClick: () => {
+              const bookmarkTitle = window.prompt('Title for this bookmark', `#${macroNode.name}.rpa`)
+              if (bookmarkTitle === null) return
+
+              createBookmarkOnBar(toBookmarkData({
+                bookmarkTitle,
+                path: macroNode.relativePath
+              }))
+              .then(() => {
+                message.success('successfully created bookmark!', 1.5)
+              })
+            }
+          }
+        },
+        getStorageManager().isXFileMode() ? {
+          type: MenuItemType.Button,
+          data: {
+            content: 'Copy to Local Storage',
+            onClick: () => {
+              getStorageManager().isStrategyTypeAvailable(StorageStrategyType.Browser)
+              .then(() => {
+                const macroStorage = getStorageManager().getStorageForTarget(StorageTarget.Macro, StorageStrategyType.Browser)
+
+                return getStorageManager().getStorageForTarget(StorageTarget.Macro, StorageStrategyType.XFile)
+                .read(macroNode.fullPath, 'Text')
+                .then(macro => {
+                  const tcCopy = { ...macro, id: uid() }
+                  delete tcCopy.status
+
+                  return macroStorage.write(tcCopy.name, tcCopy)
+                  .then(() => message.success('copied'))
+                })
+              })
+              .catch(e => {
+                message.warn(e.message)
+              })
+            }
+          }
+        } : null,
+        getStorageManager().isBrowserMode() ? {
+          type: MenuItemType.Button,
+          data: {
+            content: 'Copy to Macro Folder',
+            onClick: () => {
+              getStorageManager().isStrategyTypeAvailable(StorageStrategyType.XFile)
+              .then(() => {
+                const macroStorage = getStorageManager().getStorageForTarget(StorageTarget.Macro, StorageStrategyType.XFile)
+
+                return getStorageManager().getStorageForTarget(StorageTarget.Macro, StorageStrategyType.Browser)
+                .read(macroNode.fullPath, 'Text')
+                .then(macro => {
+                  const tcCopy = { ...macro, id: uid() }
+                  delete tcCopy.status
+
+                  return macroStorage.write(tcCopy.name, tcCopy)
+                  .then(() => message.success('copied'))
+                })
+              })
+              .catch(e => {
+                log.error(e)
+                this.props.updateUI({ showXFileNotInstalledDialog: 1 })
+              })
+            }
+          }
+        } : null,
         {
           type: MenuItemType.Divider,
           data: {}
@@ -626,7 +776,9 @@ class Files extends React.Component {
               .then(macro => {
                 folder.file(fileName, toJSONString({
                   name:     macro.name,
-                  commands: macro.data.commands
+                  commands: macro.data.commands,
+                  // script: keep JS script macros intact (undefined for table macros)
+                  script:   macro.data.script
                 }, {
                   ignoreTargetOptions: this.props.ignoreTargetOptions
                 }))
@@ -746,6 +898,22 @@ class Files extends React.Component {
           </Button>
           </Dropdown>
           <Input.Search style={{ flex: 1 }} placeholder="search macro" value={ this.props.searchText } onChange={ e => this.props.setMacroQuery(e.target.value) } />
+          {getStorageManager().isXFileMode() ? (
+            // file mode: the tree only knows what the last listing saw —
+            // files added, edited or renamed OUTSIDE Ui.Vision (an editor,
+            // a git pull) need this nudge. Same action as the IDE's reload
+            // icon next to the storage-mode picker.
+            <Button
+              shape="circle"
+              title="Reload the macro tree from the hard drive"
+              onClick={() => {
+                getStorageManager().emit(StorageManagerEvent.ForceReload)
+                message.info('reloaded from hard drive')
+              }}
+            >
+              <ReloadOutlined />
+            </Button>
+          ) : null}
         </div>
         {this.renderMacros()}
         {this.renderRenameModal()}
@@ -765,14 +933,13 @@ export default connect(
     macroFileNodeData: getMacroFileNodeData(state),
     macros: getMacroFileNodeList(state),
     isPlaying: isPlaying(state),
-    testSuites: state.editor.testSuites,
     editing: state.editor.editing,
     player: state.player,
     config: state.config,
     ignoreTargetOptions: getShouldIgnoreTargetOptions(state),
     searchText: state.macroQuery,
     filteredMacroFileNodeData: getFilteredMacroFileNodeData(state),
-    canUseKeyboardShortcuts: isFocusOnSidebar(state) && state.ui.sidebarTab !== 'test_suites'
+    canUseKeyboardShortcuts: isFocusOnSidebar(state)
   }),
   dispatch => bindActionCreators({...actions, ...simpleActions}, dispatch)
 )(Files)

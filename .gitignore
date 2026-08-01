@@ -1,8 +1,11 @@
 imagesearch-testextension
 node_modules
+
+### MCP bridge: local auth secret, never commit
+mcp/.uivision_mcp_token
 dist
 dist_*
-*_ext.zip
+*_ext*.zip
 public/bundle.js
 .req
 *.diff

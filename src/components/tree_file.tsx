@@ -3,6 +3,9 @@ import PropTypes from 'prop-types'
 import { DragSource, DropTarget, DragSourceConnector, DragSourceMonitor, DropTargetConnector, DropTargetMonitor } from 'react-dnd'
 // import { Icon } from 'antd'
 import { MenuFoldOutlined } from '@ant-design/icons';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
+// Deep-path import keeps webpack from bundling the whole icon set
+import { faFileCode } from '@fortawesome/free-regular-svg-icons/faFileCode'
 import { cn } from '@/common/utils'
 import { TreeNode, TreeNodeData, TreeNodeProps } from './tree'
 import { safeUpdateIn, compose, isForestEqual } from '@/common/ts_utils'
@@ -76,6 +79,11 @@ export class InternalFileTree extends React.Component<FileTreeProps, FileTreeSta
   renderFileIcon = (data: FileNodeData) => {
     switch (data.type) {
       case FileNodeType.File:
+        // JS script macros are recognized by the .js name suffix — outline
+        // "file with code" icon, monochrome sibling of the classic </> glyph
+        if (/\.js$/i.test(data.name || '')) {
+          return <FontAwesomeIcon icon={faFileCode} className="file-node-icon js-file-icon" />
+        }
         return (
           // <img
           //   src="./img/code.svg"

@@ -3,18 +3,35 @@
 .sidepanel {
   position: relative;
   // display: none;
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-width: 260px;
   height: 100%;
-  border-right: 2px solid #ccc;
+  // 1:1 nanobrowser frame: hairline pastel sky-blue border (tailwind sky-200)
+  // with a large radius; overflow-hidden clips the inner bars into the corners
+  border: 1px solid rgb(186, 230, 253);
+  border-radius: 16px;
+  overflow: hidden;
+  // the whole panel is the tinted frame; the tab content floats on it as a
+  // rounded card. Soft gradient instead of a flat tint — mimics nanobrowser's
+  // bg.jpg without shipping an image
+  background: linear-gradient(180deg, #eaf4ff 0%, #dceafb 100%);
 
+  // desktop/browser indicator, shown at the right end of the tab bar;
+  // clicking it opens the Vision settings tab
   .vision-type {
-    position: absolute;
+    display: flex;
+    align-items: center;
     width: 15px;
     height: 15px;
-    right: 20px;
-    top: 10px;
-    z-index: 10;
+    margin: 0 12px 0 8px;
+    color: #6b7280;
+    cursor: pointer;
+
+    &:hover {
+      color: #1a6ce0;
+    }
 
     svg {
       width: inherit;
@@ -22,17 +39,170 @@
     }
   }
 
+  // tabs area fills everything above the status/control zone; overflow hidden
+  // is the hard stop that keeps long macro lists from pushing the status bar
+  // and play/record controls out of view — scrolling happens inside the tab
+  // content (.ant-tabs-content-holder), never on the panel itself
   .sidebar-inner {
-    position: absolute;
-    top: 40px;
-    bottom: 100px;
-    margin-top: -8px;
-    right: 0;
-    left: 0;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    // rounded content card on the tinted frame; overflow:hidden also clips
+    // the (tinted) tab bar into the rounded top corners
+    margin: 4px 4px 0;
+    background: #fff;
+    border: 1px solid #d9e5f2;
+    border-radius: 12px;
+    // note: no extra padding for `.no-tab` here — the tab bar brings its own,
+    // and the old 8px padding-top left a white strip above the tabs
+  }
 
-    &.no-tab {
-      padding-top: 8px;
-      overflow-x: hidden;
+  // status line above the per-tab bottom controls — a rounded chip matching
+  // the content card above it
+  .status-bar {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 28px;
+    padding: 4px 12px;
+    margin: 6px 4px 0;
+    border: 1px solid #d9e5f2;
+    border-radius: 8px;
+
+    // background reflects the state (see getStatusTone)
+    &.tone-idle {
+      background: #e9f3fd; // light blue: just the macro name
+      border-color: #c4ddf5;
+    }
+
+    &.tone-running {
+      background: #fffbe6; // yellow: replaying / recording
+      border-color: #ffe58f;
+    }
+
+    &.tone-success {
+      background: #f6ffed; // green: last run completed
+      border-color: #b7eb8f;
+    }
+
+    &.tone-error {
+      background: #fff1f0; // red: last run failed
+      border-color: #ffccc7;
+    }
+
+    // first row: status text plus (after a failed run) the Fix-with-AI chip
+    .status-main-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      max-width: 100%;
+      min-width: 0;
+    }
+
+    .status-text {
+      max-width: 100%;
+      font-size: 12px;
+      font-weight: 500;
+      color: #1f2937;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    // "Log" sits next to "Fix with AI" on an error: same pill, quieter, so
+    // the AI action stays the primary one
+    .open-log {
+      flex-shrink: 0;
+      font-size: 11px;
+      font-weight: 600;
+      color: #5b6472;
+      white-space: nowrap;
+      cursor: pointer;
+      padding: 1px 8px;
+      border: 1px solid #d9dee6;
+      border-radius: 999px;
+      background: #fff;
+
+      &:hover {
+        background: #eef1f5;
+      }
+    }
+
+    .fix-with-ai {
+      flex-shrink: 0;
+      font-size: 11px;
+      font-weight: 600;
+      color: #1a6ce0;
+      white-space: nowrap;
+      cursor: pointer;
+      padding: 1px 8px;
+      border: 1px solid #b7d3f5;
+      border-radius: 999px;
+      background: #fff;
+
+      &:hover {
+        background: #e9f3fd;
+      }
+    }
+
+    // auto-wait countdown, shown while a finder waits. Unlike the other rows
+    // this one WRAPS: the label carries the locator that is being waited for,
+    // and an ellipsised xpath tells the user nothing about why they are
+    // waiting. Two lines max, so the bar cannot grow without bound.
+    .status-wait {
+      max-width: 100%;
+      font-size: 11px;
+      line-height: 1.35;
+      color: #4b5563;
+      text-align: center;
+      white-space: normal;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      word-break: break-word;
+    }
+
+    // latest log entry, shown while a macro is running; click opens Logs tab
+    .status-last-log {
+      max-width: 100%;
+      font-size: 11px;
+      color: #4b5563;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: pointer;
+
+      &:hover {
+        color: #1a6ce0;
+      }
+
+      &.error {
+        color: #cf1322;
+      }
+
+      &.warning {
+        color: #ad6800;
+      }
+    }
+  }
+
+  .tab-bottom-bar {
+    flex: none;
+    height: 48px;
+    padding: 8px 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    // transparent: the panel's gradient frame shows through
+    background: transparent;
+
+    .bar-label {
+      font-size: 13px;
+      color: #666;
     }
   }
 
@@ -41,6 +211,37 @@
     text-align: center;
     font-size: 14px;
     color: #aaa;
+  }
+
+  // empty-state call-to-action (empty Files tree / no macro loaded):
+  // points beginners to the AI-first flow
+  .files-empty-cta,
+  .macro-empty-cta {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 40px 24px 0;
+    text-align: center;
+
+    .cta-title {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 600;
+      color: #1f2937;
+    }
+
+    .cta-text {
+      margin: 0;
+      font-size: 13px;
+      color: #6b7280;
+    }
+
+    .cta-alt {
+      margin: 4px 0 0;
+      font-size: 12px;
+      color: #9aa4b2;
+    }
   }
 
   .sidebar-macros {
@@ -158,79 +359,278 @@
   }
 
   .ant-tabs {
-    min-height: 100%;
+    display: flex;
+    flex-direction: column;
     height: 100%;
   }
 
-  .ant-tabs-content {
-    height: calc(100% - 20px);
+  // the flexed content holder owns the scroll
+  .ant-tabs-content-holder {
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
   }
 
-  .ant-tabs-bar {
-    margin-bottom: 0;
+  // min-height (not height) so long lists can grow and scroll inside the
+  // holder; flex column so a pane can opt into filling the full height
+  .ant-tabs-content {
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
   }
 
-  .ant-tabs-nav-container-scrolling {
-    padding-left: 0;
-    padding-right: 0;
+  // while a full-height pane (AI chat) is ACTIVE the content must be height-
+  // constrained, not grow-able: only then does .ai-conversation overflow and
+  // scroll internally, with the composer pinned below. Without this the
+  // whole pane grows and the content holder scrolls it as one block —
+  // composer drifts out of view and chat auto-scroll has nothing to scroll.
+  .ant-tabs-content:has(> .full-height-pane.ant-tabs-tabpane-active) {
+    height: 100%;
   }
 
+  // panes that lay themselves out as a full-height flex column (AI chat)
+  .ant-tabs .ant-tabs-tabpane.full-height-pane {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+
+    // must not override antd's hiding of inactive panes
+    &.ant-tabs-tabpane-hidden {
+      display: none;
+    }
+  }
+
+  // --- segmented-control style tab bar (Claude-for-Chrome-ish) ---
+  // Note: selectors mirror antd v5's own (`.ant-tabs-card > .ant-tabs-nav ...`)
+  // plus the `.sidepanel` prefix, so they beat the runtime-injected antd styles
+  // without needing !important
+  .ant-tabs > .ant-tabs-nav {
+    margin: 0;
+    padding: 8px 10px;
+    // stays white like the rest of the card, so the blue outside reads as a
+    // frame around the whole UI (nanobrowser-style); the segmented pill alone
+    // structures the header
+    background: #fff;
+
+    &::before {
+      border-bottom: none;
+    }
+
+    .ant-tabs-nav-wrap {
+      flex: 1;
+    }
+
+    .ant-tabs-nav-list {
+      width: 100%;
+      padding: 3px;
+      gap: 2px;
+      // a notch darker than the tinted bar so the segmented control stays visible
+      background: #dde8f4;
+      border-radius: 10px;
+    }
+  }
+
+  .ant-tabs-card > .ant-tabs-nav .ant-tabs-tab {
+    flex: 1;
+    justify-content: center;
+    margin: 0;
+    padding: 4px 8px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    transition: background 0.15s ease, color 0.15s ease;
+
+    .ant-tabs-tab-btn {
+      color: #6b7280;
+      font-weight: 500;
+      transition: color 0.15s ease;
+    }
+
+    &:hover .ant-tabs-tab-btn {
+      color: #111827;
+    }
+
+    &.ant-tabs-tab-active {
+      background: #fff;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+
+      .ant-tabs-tab-btn {
+        color: #111827;
+        text-shadow: none;
+      }
+    }
+  }
+
+  .ant-tabs .ant-tabs-ink-bar {
+    display: none;
+  }
+
+  .ant-tabs-nav-more,
   .ant-tabs-tab-prev.ant-tabs-tab-arrow-show,
   .ant-tabs-tab-next.ant-tabs-tab-arrow-show {
     display: none;
   }
 
-  .ant-tabs-nav {
-    height: 35px;
-  }
-
-  .ant-tabs-nav .ant-tabs-tab {
-    margin-right: 0;
-    line-height: 27px;
-  }
-
-  .ant-tabs-nav-scroll {
-    text-align: left;
-  }
-
   .resize-handler {
     position: absolute;
-    right: -2px;
+    // sits inside the rounded frame now — a negative offset would be clipped
+    // by the panel's overflow:hidden
+    right: 0;
     top: 0;
     bottom: 0;
     width: 2px;
-    background: #ccc;
+    background: transparent;
     cursor: col-resize;
 
     &:hover, &.focused {
-      right: -4px;
       width: 6px;
       background: #aaa;
     }
   }
 
-  &.with-xmodules-note {
-    .sidebar-inner {
-      bottom: 160px;
-    }
-
-    .sidebar-storage-mode {
-      height: 160px;
-    }
-
-    .note-for-macros {
-      margin-bottom: 20px;
-      padding: 10px 10px 0;
-      border-top: 1px solid #333;
-      font-size: 12px;
-    }
-  }
 }
 
 .with-sidebar .sidepanel {
-  display: block;
+  display: flex;
+}
+
+// dark theme for the segmented tab bar + status line
+// (colors match src/styles/_dark-theme-variables.scss)
+html[data-theme='dark'] .sidepanel {
+  // dark twin of the light blue-grey frame: bars slightly darker than the
+  // #23272f body so top and bottom read as chrome, not content
+  background: #1f242b;
+  // nanobrowser dark-mode border (tailwind sky-800)
+  border-color: #075985;
+
+  .sidebar-inner {
+    background: #23272f;
+    border-color: #353b46;
+  }
+
+  // tab bar matches the dark card, so the darker frame stays outside
+  .ant-tabs > .ant-tabs-nav {
+    background: #23272f;
+  }
+
+  .tab-bottom-bar,
+  .control-panel-container {
+    background: #1f242b;
+  }
+
+  .command-table .ReactVirtualized__Table__headerRow {
+    background: #2a2f38;
+    border-bottom-color: #353b46;
+  }
+
+  .ant-tabs-nav-list {
+    background: #2a2f38;
+  }
+
+  .ant-tabs-nav .ant-tabs-tab {
+    .ant-tabs-tab-btn {
+      color: #9aa4b2;
+    }
+
+    &:hover .ant-tabs-tab-btn {
+      color: #f6f6f9;
+    }
+
+    &.ant-tabs-tab-active {
+      background: #404755;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+
+      .ant-tabs-tab-btn {
+        color: #f6f6f9;
+      }
+    }
+  }
+
+  .status-bar {
+    border-color: #353b46;
+
+    // muted dark-theme tints of the state colors
+    &.tone-idle {
+      background: #1e2c3d;
+      border-color: #2b425e;
+    }
+
+    &.tone-running {
+      background: #3a3423;
+      border-color: #5c4f1d;
+    }
+
+    &.tone-success {
+      background: #20321f;
+      border-color: #2f4d2c;
+    }
+
+    &.tone-error {
+      background: #3a2325;
+      border-color: #5c2f33;
+    }
+
+    .status-text {
+      color: #e8ecf3;
+    }
+
+    .status-wait {
+      color: #b6bfcc;
+    }
+
+    .status-last-log {
+      color: #b6bfcc;
+
+      &:hover {
+        color: #69b1ff;
+      }
+
+      &.error {
+        color: #ff7875;
+      }
+
+      &.warning {
+        color: #e8c06a;
+      }
+    }
+  }
+
+  .vision-type {
+    color: #9aa4b2;
+  }
+
+  .open-log {
+    color: #9aa4b2;
+    background: #23272f;
+    border-color: #333a45;
+
+    &:hover {
+      background: #2b313a;
+    }
+  }
+
+  .fix-with-ai {
+    color: #69b1ff;
+    background: #23272f;
+    border-color: #2b425e;
+
+    &:hover {
+      background: #1e2c3d;
+    }
+  }
+
+  .files-empty-cta,
+  .macro-empty-cta {
+    .cta-title {
+      color: #e8ecf3;
+    }
+
+    .cta-text {
+      color: #9aa4b2;
+    }
+  }
 }
 
 .context-menu {
@@ -270,4 +670,158 @@
 
 .macros-dropdown {
   width: auto !important;
+}
+
+
+// full-panel overlay while the pop-out IDE window is open: the IDE owns macro
+// editing then, so the sidebar greys out to prevent concurrent edits that
+// would clobber each other (see checkIdeWindowOpen in index.js)
+// external-control indicator: shown while the MCP bridge executes tool calls.
+// In normal flow (not an overlay) so it pushes the tabs down instead of
+// covering them — the panel stays fully usable and visibly "shared".
+.mcp-control-banner {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #fff;
+  background: #5b4bc4;
+
+  .mcp-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #8aff5e;
+    animation: mcp-pulse 1.2s ease-in-out infinite;
+    flex: none;
+  }
+
+  .mcp-tool {
+    margin-left: auto;
+    font-family: monospace;
+    font-weight: 400;
+    opacity: 0.85;
+  }
+}
+
+@keyframes mcp-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+.ide-open-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(240, 240, 240, 0.75);
+  backdrop-filter: blur(1px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+
+  .ide-open-overlay-card {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+    padding: 20px;
+    max-width: 260px;
+    text-align: center;
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 15px;
+    }
+
+    p {
+      margin: 0 0 16px;
+      color: #666;
+      font-size: 13px;
+    }
+
+    .ant-btn + .ant-btn {
+      margin-top: 8px;
+    }
+  }
+}
+
+// post-it look for the one-time interface-switch hint (controlbar/index.js)
+.interface-hint-popover {
+  --antd-arrow-background-color: #feff9c;
+
+  .ant-popover-inner {
+    background: #feff9c;
+    box-shadow: 2px 4px 10px rgba(0, 0, 0, 0.25);
+  }
+
+  .ant-popover-inner-content {
+    color: #4a4200;
+  }
+
+  .interface-hint {
+    max-width: 240px;
+
+    p {
+      margin: 0 0 10px;
+    }
+  }
+}
+
+// One-time macro-format choice (macro_setup_dialog.js). Options stack full
+// width with their explanation underneath, so the three are read as a list of
+// choices rather than a row of buttons competing for the primary slot.
+.macro-setup-dialog {
+  .macro-setup-options {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin: 18px 0 12px;
+  }
+
+  .macro-setup-option {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .macro-setup-hint {
+    font-size: 12px;
+    color: #6b7280;
+    line-height: 1.4;
+  }
+
+  // the "nothing is deleted" line has to be read, not skimmed past — it is
+  // the answer to the question the dialog itself provokes
+  .macro-setup-reassure {
+    margin: 12px 0 0;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: #f0f7ff;
+    border: 1px solid #d6e8fb;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+}
+
+html[data-theme='dark'] .macro-setup-dialog {
+  .macro-setup-hint {
+    color: #9aa4b2;
+  }
+
+  .macro-setup-reassure {
+    background: #1d2733;
+    border-color: #2b425e;
+    color: #cbd5e1;
+  }
+}
+
+// macro-type icons on the Settings > General visibility checkboxes — the same
+// glyphs the macro tree uses, so the setting and the tree read as one thing
+.macro-type-icon {
+  width: 13px;
+  margin-right: 2px;
+  opacity: 0.75;
 }

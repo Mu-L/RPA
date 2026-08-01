@@ -1,4 +1,4 @@
-import Interpreter from 'kd-js-interpreter'
+import Interpreter from './vendor/js-interpreter'
 import Ext from './web_extension'
 
 export function evaluateScript (code) {

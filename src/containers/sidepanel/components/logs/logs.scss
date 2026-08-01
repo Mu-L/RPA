@@ -6,6 +6,101 @@
     padding: 2px 5px;
 }
 
+// Data tab: Logs | Shots | CSV | Visual sub-tabs
+.data-tab {
+    // the outer sidepanel tabs own the scrolling — keep the sub-tab bar
+    // visible while long lists scroll underneath
+    .ant-tabs > .ant-tabs-nav {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        padding: 6px 8px;
+    }
+
+    // resource tables are wide for a ~260px panel — compact cells
+    .ant-table-thead > tr > th,
+    .ant-table-tbody > tr > td {
+        padding: 4px 6px;
+    }
+
+    .csv-content,
+    .vision-content {
+        padding: 0 8px 8px;
+    }
+
+    .vision-search-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 4px 0 8px;
+
+        .more-info {
+            flex-shrink: 0;
+            font-size: 12px;
+        }
+    }
+
+    .vision-actions {
+        display: flex;
+        flex-direction: row;
+        justify-content: center;
+
+        button {
+            margin-right: 5px;
+
+            &:last-child {
+                margin-right: 0;
+            }
+        }
+    }
+
+    .vision-name-1 {
+        word-break: break-all;
+    }
+
+    .screenshot-content {
+        list-style: none;
+        margin: 0;
+        padding: 8px 10px;
+
+        li {
+            padding-bottom: 16px;
+
+            .timestamp {
+                display: block;
+                margin-bottom: 6px;
+                font-size: 12px;
+            }
+
+            .filename {
+                font-weight: bold;
+                word-break: break-all;
+            }
+        }
+    }
+
+    .hidden-during-replay {
+        margin-top: 20px;
+        text-align: center;
+        font-size: 13px;
+        color: #aaa;
+    }
+}
+
+// "Load Image" pseudo-button in the Data tab's bottom bar (a label wrapping a
+// hidden file input, styled as an antd primary button)
+.tab-bottom-bar .load-image-button {
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+
+    label {
+        padding: 0 15px;
+        cursor: pointer;
+    }
+}
+
 .log-content {
     list-style: none;
     margin: 0;

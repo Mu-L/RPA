@@ -41,7 +41,7 @@ const state = {
   // Note: current frame stack when recording, it helps
   // to generate `selectFrame` commands
   recordingFrameStack: [],
-  // Note: snapshot of extension config (content script cares about click/clickAt when recording)
+  // Note: snapshot of extension config
   // It is supposed to be updated when user activates that page
   config: {},
   // Note: To achieve verifyText, we need contextmenu event on page plus menu item click event from background
@@ -156,24 +156,9 @@ const createLogoImg = () => {
   return img
 }
 
-const addWaitInCommand = (cmdObj) => {
-  const { cmd } = cmdObj
-
-  switch (cmd) {
-    case 'click':
-    case 'clickAt':
-      return {...cmdObj, cmd: 'clickAndWait', value: ''}
-
-    case 'select':
-      return {...cmdObj, cmd: 'selectAndWait'}
-
-    default:
-      return cmdObj
-  }
-}
-
 // report recorded commands to background.
-// transform `leave` event to clickAndWait / selectAndWait event based on the last command
+// a `leave` right after a click/select flushes that debounced command as-is —
+// the *AndWait variants are deprecated, page-load waiting is automatic
 const reportCommand = (function () {
   const LEAVE_INTERVAL  = 500
   let last              = null
@@ -204,7 +189,7 @@ const reportCommand = (function () {
         }
 
         if ((new Date() - lastTime) < LEAVE_INTERVAL) {
-          obj = addWaitInCommand(last)
+          obj = last
         } else {
           return
         }
@@ -212,7 +197,6 @@ const reportCommand = (function () {
         break
       }
       case 'click':
-      case 'clickAt':
       case 'select': {
         timer = setTimeout(() => {
           superCsIpc.ask('CS_RECORD_ADD_COMMAND', obj)
@@ -269,54 +253,6 @@ const isValidType = (el) => {
   if (tag === 'input' && ['radio, checkbox'].indexOf(type) === -1)  return true
 
   return false
-}
-
-const downloadSaveItem = ($dom, cmd) => {
-  if(cmd =="saveItem"){
-          var cachedImage = $dom; 
-          var url = cachedImage.src; 
-          var filename = url.substring(url.lastIndexOf('/')+1);
-
-          // Check if the cached image exists
-          if (cachedImage.complete && cachedImage.naturalWidth !== 0) {
-            // If the cached image exists, create a temporary URL for the image
-            const tempUrl = URL.createObjectURL(cachedImage.src);
-            const link = document.createElement("a");
-            link.download = filename;
-            link.href = tempUrl;
-            link.click();
-            // Release the temporary URL
-            URL.revokeObjectURL(tempUrl);
-          } else {
-            // If the cached image doesn't exist, create a new image object
-            const image = new Image();
-            // Set the image source URL
-            image.src = url;
-            // Wait for the image to load
-            image.onload = () => {
-              // Store the image in cache for future use
-              const canvas = document.createElement("canvas");
-              canvas.width = image.naturalWidth;
-              canvas.height = image.naturalHeight;
-              canvas.getContext("2d").drawImage(image, 0, 0);
-              const extension = filename.split(".").pop();
-              const dataURL = canvas.toDataURL(`image/${extension}`);
-              localStorage.setItem("myImage", dataURL);
-              // Create a temporary URL for the image
-              const tempUrl = URL.createObjectURL(image.src);
-              // Create a link element with a download attribute
-              const link = document.createElement("a");
-              link.download = filename;
-              link.href = tempUrl;
-              // Click the link to trigger a download of the image
-              link.click();
-              // Release the temporary URL
-              URL.revokeObjectURL(tempUrl);
-  };
-}
-
-
-  }
 }
 
 const highlightDom = ($dom, timeout) => {
@@ -388,6 +324,126 @@ const createHighlightX = function (opts = {}) {
 }
 
 const highlightX = createHighlightX()
+
+// Big animated cursor shown while trusted CDP input is dispatched
+// (uiv.browser.* / the internal BClick/BMove engine).
+// CDP events never move the real OS mouse, so without this overlay the user
+// gets zero visual feedback (same idea as the cursor in "Claude for Chrome").
+// The cursor glides to each new position, shows a ripple on clicks, and
+// fades out after a short idle period.
+const createBrowserCursor = function () {
+  const GLIDE_MS = 100
+  const HIDE_AFTER_MS = 3000
+  let $cursor = null
+  let visible = false
+  let hideTimer
+
+  const ensure = () => {
+    if ($cursor && $cursor.isConnected) return $cursor
+
+    $cursor = document.createElement('div')
+    // Tip of the arrow sits at the container origin, so translate(x, y)
+    // puts the tip exactly on the target point
+    $cursor.innerHTML = `
+      <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24"
+           style="display: block; transform: translate(-2px, -1px); filter: drop-shadow(0 1px 2px rgba(0,0,0,.45))">
+        <path d="M2 1 L2 19 L7 14.5 L10 21.5 L13.2 20.1 L10.3 13.2 L17 13 Z"
+              fill="#1e6fd9" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"></path>
+      </svg>
+    `
+
+    // UI Vision logo below the arrow, so it's clear who is moving the mouse
+    const $logo = createLogoImg()
+    inspector.setStyle($logo, {
+      position: 'absolute',
+      left: '12px',
+      top: '32px',
+      width: '18px',
+      height: '18px',
+      filter: 'drop-shadow(0 1px 2px rgba(0,0,0,.45))'
+    })
+    $cursor.appendChild($logo)
+
+    inspector.setStyle($cursor, {
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      zIndex: 2147483647,
+      pointerEvents: 'none',
+      opacity: 0,
+      transition: `transform ${GLIDE_MS}ms ease-out, opacity 150ms ease-out`,
+      willChange: 'transform'
+    })
+
+    document.documentElement.appendChild($cursor)
+    return $cursor
+  }
+
+  const ripple = (x, y) => {
+    const $r = document.createElement('div')
+
+    inspector.setStyle($r, {
+      position: 'fixed',
+      left: `${x - 18}px`,
+      top: `${y - 18}px`,
+      width: '36px',
+      height: '36px',
+      borderRadius: '50%',
+      border: '3px solid rgba(46, 204, 113, .9)',
+      pointerEvents: 'none',
+      zIndex: 2147483646
+    })
+
+    document.documentElement.appendChild($r)
+
+    const anim = $r.animate(
+      [
+        { transform: 'scale(.3)', opacity: 1 },
+        { transform: 'scale(1.4)', opacity: 0 }
+      ],
+      { duration: 450, easing: 'ease-out' }
+    )
+    anim.onfinish = () => $r.remove()
+  }
+
+  return ({ x, y, isClick }) => {
+    const $el = ensure()
+    clearTimeout(hideTimer)
+
+    if (!visible) {
+      // First appearance: pop in at the target instead of gliding across
+      // the whole page from (0, 0)
+      $el.style.transition = 'none'
+      $el.style.transform = `translate(${x}px, ${y}px)`
+      $el.getBoundingClientRect() // flush styles so the next transform animates
+      $el.style.transition = `transform ${GLIDE_MS}ms ease-out, opacity 150ms ease-out`
+      visible = true
+    }
+
+    inspector.setStyle($el, {
+      opacity: 1,
+      transform: `translate(${x}px, ${y}px)`
+    })
+
+    hideTimer = setTimeout(() => {
+      visible = false
+      if ($cursor) inspector.setStyle($cursor, { opacity: 0 })
+    }, HIDE_AFTER_MS)
+
+    if (!isClick) return Promise.resolve(true)
+
+    // Resolve after the glide so the caller can dispatch the real click once
+    // the cursor has visually arrived
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        ripple(x, y)
+        resolve(true)
+      }, GLIDE_MS + 20)
+    })
+  }
+}
+
+const browserCursor = createBrowserCursor()
 
 const createHighlightRect = function (opts = {}) {
   const $mask = document.createElement('div')
@@ -519,33 +575,11 @@ const onClick = (e) => {
 })()
   const targetInfo = inspector.getLocator(e.target, true)
 
-  log('onClick, switch  case', state.config.recordClickType)
-  switch (state.config.recordClickType) {
-    case 'clickAt':
-      reportCommand({
-        ...targetInfo,
-        cmd: 'clickAt',
-        value: (function () {
-          const { clientX, clientY } = e
-          const { top, left } = e.target.getBoundingClientRect()
-          const x = Math.round(clientX - left)
-          const y = Math.round(clientY - top)
-
-          return `${x},${y}`
-        })()
-      })
-      break
-    case 'click':
-    default:
-      reportCommand({
-        ...targetInfo,
-        cmd: 'click'
-      })
-      break
-    case 'saveItem':
-      console.log('saveItem==> ',targetInfo)
-    break
-  }
+  // clickAt is deprecated — recording always emits a plain click
+  reportCommand({
+    ...targetInfo,
+    cmd: 'click'
+  })
 
   if (e.target.nodeName.toLowerCase() === 'option') {
     initMultipleSelect(e.target.parentNode)
@@ -606,35 +640,6 @@ const onContentEditableChange = (e) => {
   })
 }
 
-const onDragDrop = (function () {
-  let dragStart = null
-
-  return (e) => {
-    switch (e.type) {
-      case 'dragstart': {
-        dragStart = inspector.getLocator(e.target, true)
-        break
-      }
-      case 'drop': {
-        if (!dragStart) return
-        const tmp   = inspector.getLocator(e.target, true)
-        const drop  = {
-          value: tmp.target,
-          valueOptions: tmp.targetOptions
-        }
-
-        reportCommand({
-          cmd: 'dragAndDropToObject',
-          ...dragStart,
-          ...drop
-        })
-
-        dragStart = null
-      }
-    }
-  }
-})()
-
 const onLeave = (e) => {
   reportCommand({
     cmd: 'leave',
@@ -657,8 +662,6 @@ const bindEventsToRecord = () => {
   document.addEventListener('click', onClick, true)
   document.addEventListener('focus', onFocus, true)
   document.addEventListener('change', onChange, true)
-  document.addEventListener('dragstart', onDragDrop, true)
-  document.addEventListener('drop', onDragDrop, true)
   document.addEventListener('contextmenu', onContextMenu, true)
   window.addEventListener('beforeunload', onLeave, true)
 
@@ -669,8 +672,6 @@ const unbindEventsToRecord = () => {
   document.removeEventListener('click', onClick, true)
   document.removeEventListener('focus', onFocus, true)
   document.removeEventListener('change', onChange, true)
-  document.removeEventListener('dragstart', onDragDrop, true)
-  document.removeEventListener('drop', onDragDrop, true)
   document.removeEventListener('contextmenu', onContextMenu, true)
   window.removeEventListener('beforeunload', onLeave, true)
 
@@ -801,7 +802,6 @@ const bindIPCListener = () => {
         if ($el) {
           $el.scrollIntoView({ block: 'center' })
           highlightDom($el)
-          downloadSaveItem($el,args.cmd)
         }
 
         return true
@@ -821,6 +821,10 @@ const bindIPCListener = () => {
         }
         highlightX(rect, args)
         return true
+      }
+
+      case 'SHOW_BROWSER_CURSOR': {
+        return browserCursor(args)
       }
 
       case 'HIGHLIGHT_RECTS': {
@@ -950,7 +954,6 @@ const bindIPCListener = () => {
 
       case 'CONTEXT_MENU_IN_RECORDING': {
         switch (args && args.command) {
-          case 'verifyText':
           case 'assertText':
             if (!state.elementOnContextMenu) {
               break
@@ -963,7 +966,6 @@ const bindIPCListener = () => {
             })
             break
 
-          case 'verifyTitle':
           case 'assertTitle':
             reportCommand({
               cmd:    args.command,
@@ -1244,7 +1246,11 @@ const bindInvokeEvent = () => {
     log('invoke event', e)
     window.dispatchEvent(new CustomEvent('kantuInvokeSuccess'))
 
-    const queries = parseQuery(window.location.search)
+    // a bookmark run can start on ANY page, so only the query params
+    // Ui.Vision actually understands may merge into the options — the rest
+    // (?production=true, ?ionicplatform=md, ...) belong to the page and used
+    // to surface as "Unknown command line parameter" warnings
+    const queries = pick(C.INVOKE_URL_PARAMS, parseQuery(window.location.search))
 
     csIpc.ask('CS_INVOKE', {
       testCase: e.detail,
@@ -1295,7 +1301,7 @@ const bindInvokeEvent = () => {
         console.log('doesQueriesContainMacroOrTestSuite:>> queries: ', queries)
         return runCsInvokeFromQueries({ ...queries, storageMode })
       } else if (e.detail.noImport) {
-        const msg = 'Command line must include one of these params: macro, folder, testsuite'
+        const msg = 'Command line must include one of these params: macro, folder'
         alert(msg)
         throw new Error(msg)
       }

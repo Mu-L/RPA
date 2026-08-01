@@ -1,4 +1,3 @@
-import { Jimp } from 'jimp'
 import { ComputerUseMessageType } from './model'
 
 export interface ComputerUseActionResult {
@@ -31,6 +30,9 @@ class ComputerUse {
   config: any
   keyMap: any
   scaleFactor: number
+  // Dimensions of the last screenshot as sent to the model — needed to
+  // convert normalized (0-1000) coordinates some models return (e.g. Gemini)
+  lastImageSize: { width: number; height: number } | null = null
 
   constructor( private params: ComputerUseParams  ) {
     this.screenshotCount = 0
@@ -43,13 +45,13 @@ class ComputerUse {
       closeBrowser: false
     }
 
-    // Map API key names to UI.Vision format
+    // Map API key names to Ui.Vision format
     this.keyMap = {
       Return: '${KEY_ENTER}',
       Enter: '${KEY_ENTER}',
       Tab: '${KEY_TAB}',
       Escape: '${KEY_ESC}',
-      Backspace: '${KEY_BACK}',
+      Backspace: '${KEY_BKSP}',
       Delete: '${KEY_DELETE}',
       ArrowUp: '${KEY_UP}',
       Arrow_Down: '${KEY_DOWN}',
@@ -79,6 +81,8 @@ class ComputerUse {
   }
 
   async processImage(imageBuffer: ArrayBuffer): Promise<ProcessedImageResult>  {
+    // Lazy-load jimp (~700 KB) so it stays out of the eager panel bundle
+    const { Jimp } = await import('jimp')
     const image = await Jimp.read(imageBuffer)
 
     const metadata = {
@@ -122,7 +126,7 @@ class ComputerUse {
   async processAction(action: any) {
     console.log('Processing action:', action)
 
-    // Convert API action format to UI.Vision format
+    // Convert API action format to Ui.Vision format
     const uiVisionAction = this.convertToUIVisionFormat(action)
     if (!uiVisionAction.success) {
       return uiVisionAction // Return error if conversion failed
@@ -274,13 +278,14 @@ class ComputerUse {
 
     const processedImage = await this.processImage(imageBuffer)
     this.scaleFactor = processedImage.scaleFactor || 1
+    this.lastImageSize = { width: processedImage.scaledWidth, height: processedImage.scaledHeight }
 
     console.log('processedImage:>> ', processedImage)
 
     const base64Image = Buffer.from( processedImage.scaledBuffer).toString('base64')
     return {
       success: true,
-      message: 'Screenshot taken with UI.Vision',
+      message: 'Screenshot taken with Ui.Vision',
       base64Image: base64Image
     }
   }

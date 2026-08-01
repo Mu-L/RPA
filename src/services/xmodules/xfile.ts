@@ -18,7 +18,7 @@ getLangs (osType:any) {
         const fsAPI = getNativeFileSystemAPI()
         return fsAPI.getSpecialFolderPath({ folder: SpecialFolder.UserProfile })
         .then(profilePath => {
-          const uivision = osType == "mac"?'/Library/uivision-xmodules/2.2.2/xmodules/': path.join(profilePath, '\\AppData\\Roaming\\UI.Vision\\XModules\\ocr');
+          const uivision = osType == "mac"?'/Library/uivision-xmodules/2.2.2/xmodules/': path.join(profilePath, '\\AppData\\Roaming\\Ui.Vision\\XModules\\ocr');
           return fsAPI.ensureDir({ path: uivision })
           .then(Opath => {
            let path =uivision;
@@ -163,15 +163,15 @@ getLangs (osType:any) {
   }
 
   checkUpdateLink (modVersion: string, extVersion: string): string {
-    return `https://goto.ui.vision/x/idehelp?help=xfileaccess_updatecheck&xversion=${modVersion}&kantuversion=${extVersion}`
+    return `https://go.ui.vision/?help=xfileaccess_updatecheck&xversion=${modVersion}&kantuversion=${extVersion}`
   }
 
   downloadLink (): string {
-    return 'https://goto.ui.vision/x/idehelp?help=xfileaccess_download'
+    return 'https://go.ui.vision/?help=xfileaccess_download'
   }
 
   infoLink (): string {
-    return 'https://goto.ui.vision/x/idehelp?help=xfileaccess'
+    return 'https://go.ui.vision/?help=xfileaccess'
   }
 }
 

@@ -520,16 +520,17 @@ export abstract class StandardStorage extends EventEmitter implements IStandardS
 
   protected sortEntries <T extends Entry> (entries: T[]): T[] {
     // Sort entries in this order
-    // 1. Directories come before files
+    // 1. Files come before directories (so root macros like "#current" sit
+    //    at the top of the tree, above the folders)
     // 2. Inside directories or files, sort it alphabetically a-z (ignore case)
     const items = [...entries]
 
     items.sort((a, b) => {
-      if (a.isDirectory && b.isFile) {
+      if (a.isFile && b.isDirectory) {
         return -1
       }
 
-      if (a.isFile && b.isDirectory) {
+      if (a.isDirectory && b.isFile) {
         return 1
       }
 

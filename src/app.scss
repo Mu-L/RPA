@@ -47,6 +47,10 @@ body {
 
   .app-inner {
     flex: 1;
+    // critical: without this a flex item never shrinks below its content
+    // (min-height defaults to auto), so a long macro/log list would stretch
+    // .app-inner beyond the window and push the sidepanel controls off-screen
+    min-height: 0;
     display: flex;
     flex-direction: row;
   }
@@ -100,5 +104,48 @@ body {
     button {
       margin-top: 20px;
     }
+  }
+}
+
+
+// AI chat docked right of the editor (same component as the side panel's AI
+// Chat tab, just with more room). Fixed-width flex column inside the
+// .app-inner flex row; the chat's own scss handles the scrolling
+// conversation and the composer pinned at the bottom.
+.ide-ai-chat-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  // fallback only — the real width is user-resizable (config.ideAiChatWidth)
+  // and set inline by app.js
+  width: 320px;
+  border-left: 1px solid #e0e0e0;
+  background: #fff;
+
+  // drag-to-resize strip on the left edge, same look as the tree view's
+  .resize-handler {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: #ccc;
+    cursor: col-resize;
+    z-index: 10;
+
+    &:hover, &.focused {
+      width: 6px;
+      background: #aaa;
+    }
+  }
+
+  .ide-ai-chat-title {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    border-bottom: 1px solid #eee;
+    font-weight: bold;
   }
 }

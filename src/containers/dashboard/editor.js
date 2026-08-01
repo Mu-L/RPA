@@ -10,6 +10,7 @@ import {
   Select,
   message,
   Tabs,
+  Tooltip,
   Modal
 } from 'antd'
 import { DoubleRightOutlined } from '@ant-design/icons'; // Replace with appropriate icon
@@ -28,6 +29,7 @@ import Draggable from "react-draggable";
 import "react-virtualized/styles.css"; 
 
 import { SelectInput } from '../../components/select_input'
+import ScriptView from '../sidepanel/components/macro/script_view'
 import { CommandItem } from './command_item'
 import { getStorageManager } from '../../services/storage'
 import inspector from '../../common/inspector'
@@ -46,10 +48,11 @@ import {
   getDoneCommandIndices,
   getErrorCommandIndices,
   getWarningCommandIndices,
-  isFocusOnCommandTable
+  isFocusOnCommandTable,
+  isScriptViewActive
 } from '../../recomputed'
 import { delay, isMac } from '../../common/ts_utils';
-import { availableCommands, availableCommandsForDesktop, commandText, indentCreatedByCommand, doesCommandSupportTargetOptions, canCommandSelect, canCommandFind } from '../../common/command'
+import { availableCommands, selectableCommands, selectableCommandsForDesktop, commandText, indentCreatedByCommand, doesCommandSupportTargetOptions, canCommandSelect, canCommandFind } from '../../common/command'
 import { FocusArea } from '../../reducers/state'
 import config from '../../config'
 import { cn, waitForRenderComplete } from '../../common/utils'
@@ -57,6 +60,7 @@ import { getLicenseService } from '../../services/license'
 import { Feature } from '../../services/license/types'
 import { isCVTypeForDesktop } from '../../common/cv_utils'
 import { selectAreaOnDesktop } from '../../ext/common/desktop_vision'
+import { openSettings } from '../../ext/common/tab'
 import ComputerSvg from '@/assets/svg/computer.svg'
 import BrowserSvg from '@/assets/svg/browser.svg'
 
@@ -129,6 +133,13 @@ class DashboardEditor extends React.Component {
     switch (type) {
       case 'table_view':
       case 'source_view': {
+        // the JSON source view does not carry the Script field — editing a
+        // script macro there would silently drop the program on save
+        if (type === 'source_view' && typeof this.props.editing.script === 'string' && !this.props.sourceErrMsg) {
+          message.info('JS script macros are edited in the JS view', 2)
+          return
+        }
+
         const forceType = this.props.sourceErrMsg ? 'source_view' : type
 
         this.props.setEditorActiveTab(forceType)
@@ -292,12 +303,12 @@ class DashboardEditor extends React.Component {
 
         case 'XClickText':
         case 'XClickTextRelative':
-        case 'XClick': {         
+        case 'XClick': {
 
           const disableTakeImageCommands = [
             'XClickText',
             'XClickTextRelative',
-          ]          
+          ]
 
           if (disableTakeImageCommands.indexOf(selectedCommand.cmd) !== -1) {
             throw new Error('No select possible for Command ' + selectedCommand.cmd + ', just enter the text')
@@ -672,6 +683,23 @@ class DashboardEditor extends React.Component {
     })      
   }  
 
+  componentDidUpdate () {
+    // The IDE can boot into the JS view (JS-first: an empty Untitled macro is
+    // a script), in which case '.table-wrapper' is not in the DOM when
+    // componentDidMount measures it — the virtual table would then render 0x0
+    // (blank) for every classic macro. Re-measure once the pane exists.
+    if (this.state.tableWidth === 0 || this.state.tableHeight === 0) {
+      this.getTableWrapper().then($table => {
+        if ($table && $table.clientWidth > 0 && $table.clientHeight > 0) {
+          this.setState({
+            tableWidth: $table.clientWidth,
+            tableHeight: $table.clientHeight
+          })
+        }
+      })
+    }
+  }
+
   componentWillUnmount () {
     document.removeEventListener('click', this.onHideMenu)
     document.removeEventListener('click', this.onDoubleClick)
@@ -926,23 +954,6 @@ class DashboardEditor extends React.Component {
         case 'run_line': {
           return this.playLine(commandIndex)
         }
-        case 'play_from_here': {
-          const { commands }  = this.props.editing
-
-          this.setState({ lastOperation: 'play' })
-
-          return this.props.playerPlay({
-            macroId:    this.props.macroId,
-            title:      this.getTestCaseName(),
-            extra:      { id: this.props.macroId },
-            mode:       Player.C.MODE.STRAIGHT,
-            startIndex: commandIndex,
-            keepVariables:'reset',
-            startUrl:   null,
-            resources:  commands,
-            postDelay:  this.props.config.playCommandInterval * 1000
-          })
-        }
         case 'play_from_here_keep_variables': {
           const { commands }  = this.props.editing
 
@@ -1029,7 +1040,7 @@ class DashboardEditor extends React.Component {
                 label: (
                   <>
                     <span>Paste</span>
-                    <span className="shortcut">{ctrlKey}P</span>
+                    <span className="shortcut">{ctrlKey}V</span>
                   </>
                 ),
                 disabled: clipboard.commands.length === 0
@@ -1082,14 +1093,6 @@ class DashboardEditor extends React.Component {
                 label: (
                   <>
                     <span>Execute this command</span>
-                  </>
-                )
-              },
-              {
-                key: "play_from_here",
-                label: (
-                  <>
-                    <span>Play from here</span>
                   </>
                 )
               },
@@ -1527,18 +1530,34 @@ class DashboardEditor extends React.Component {
     const shouldUseTextareaForTarget    = selectedCmd && ['executeScript', 'executeScript_Sandbox', 'aiPrompt', 'aiScreenXY', 'aiComputerUse'].indexOf(selectedCmd.cmd) !== -1
     const shouldUseNormalInputForTarget = !shouldUseSelectInputForTarget && !shouldUseTextareaForTarget
 
+    // JS-first mode: script macros (and the empty Untitled state) show the
+    // JS editor — the same component the side panel uses; table macros keep
+    // the classic table below as fallback
+    // A macro is EITHER a script or a command table; the tabs for the other
+    // kind stay visible but disabled, so the editor always shows what exists
+    // rather than silently hiding half of it.
+    const isScriptMacro = this.props.scriptViewActive
+    const otherKindNote = isScriptMacro
+      ? 'This is a JS script macro — the Table and Source views edit command-table macros.'
+      : 'This is a command-table macro — the JS view edits JS script macros.'
+
+    const disabledTabLabel = (label, disabled) => (
+      disabled ? <Tooltip title={otherKindNote}><span>{label}</span></Tooltip> : label
+    )
+
     return (
       <div className="editor-wrapper">
         <div className="tabs-wrapper">
           <Tabs
             type="card"
             className={cn('commands-view', { 'target-as-textarea': shouldUseTextareaForTarget })}
-            activeKey={this.props.editor.activeTab}
+            activeKey={isScriptMacro ? 'script_view' : this.props.editor.activeTab}
             onChange={this.onChangeCommandsView}
             // defaultActiveKey="1"
             items={[
               {
-                label: 'Table View',
+                label: disabledTabLabel('Table View', isScriptMacro),
+                disabled: isScriptMacro,
                 key: 'table_view',
                 children: (
                   <>
@@ -1578,7 +1597,7 @@ class DashboardEditor extends React.Component {
                               style={{ flex: 1, maxWidth: '60%', marginRight: '10px' }}
                               size="default"
                             >
-                              {(isCVTypeForDesktop(config.cvScope) ? availableCommandsForDesktop : availableCommands).map(cmd => (
+                              {(isCVTypeForDesktop(config.cvScope) ? selectableCommandsForDesktop : selectableCommands).map(cmd => (
                                 <Select.Option value={cmd} key={cmd}>
                                   {commandText(cmd)}
                                 </Select.Option>
@@ -1592,7 +1611,7 @@ class DashboardEditor extends React.Component {
                               {selectedCmd && selectedCmd.cmd ? (
                                 <a
                                   style={{ marginRight: '10px', whiteSpace: 'nowrap' }}
-                                  href={`https://goto.ui.vision/x/idehelp?cmd=${selectedCmd.cmd.toLowerCase()}`}
+                                  href={`https://go.ui.vision/?cmd=${selectedCmd.cmd.toLowerCase()}`}
                                   target="_blank"
                                 >
                                   Info for this command
@@ -1705,7 +1724,8 @@ class DashboardEditor extends React.Component {
                 )
               },
               {
-                label: 'Source View (JSON)',
+                label: disabledTabLabel('Source View (JSON)', isScriptMacro),
+                disabled: isScriptMacro,
                 key: 'source_view',
                 className: "source-view",
                 children: (
@@ -1742,9 +1762,27 @@ class DashboardEditor extends React.Component {
                     />                  
                   </>
                 )
+              },
+
+              {
+                label: disabledTabLabel('JS View', !isScriptMacro),
+                disabled: !isScriptMacro,
+                key: 'script_view',
+                // Mount the editor ONLY for an actual script macro. As a
+                // plain tab child it can mount for a command-table macro too,
+                // and ScriptView writes editing.script on its first onChange —
+                // which would turn a table macro into a half-script and mark
+                // it unsaved without anyone touching it.
+                children: isScriptMacro ? (
+                  /* ideMode: the Script tools drawer shows here without dev mode */
+                  <ScriptView ideMode />
+                ) : null
               }
-            
-            ]}
+            // JS first in the tab bar: it is the format we want people to
+            // reach for, and the leftmost tab is the one they read first.
+            // All three tabs stay present — tabs that don't apply to the
+            // current macro kind are disabled, never hidden.
+            ].sort((a, b) => (a.key === 'script_view' ? -1 : 0) - (b.key === 'script_view' ? -1 : 0))}
           >
           </Tabs>
 
@@ -1752,7 +1790,7 @@ class DashboardEditor extends React.Component {
             <div
               className="vision-type"
               onClick={() => {
-                this.props.updateUI({ showSettings: true, settingsTab: 'vision' })
+                openSettings('vision')
               }}
             >
               <ComputerSvg />
@@ -1761,7 +1799,7 @@ class DashboardEditor extends React.Component {
           ) : <div
               className="vision-type"
               onClick={() => {
-                this.props.updateUI({ showSettings: true, settingsTab: 'vision' })
+                openSettings('vision')
               }}
             >
               <BrowserSvg />
@@ -1798,7 +1836,8 @@ export default connect(
     errorCommandIndices: getErrorCommandIndices(state),
     warningCommandIndices: getWarningCommandIndices(state),
     macroId: getCurrentMacroId(state),
-    canUseKeyboardShortcuts: isFocusOnCommandTable(state)
+    canUseKeyboardShortcuts: isFocusOnCommandTable(state),
+    scriptViewActive: isScriptViewActive(state)
   }),
   dispatch => bindActionCreators({...actions, ...simpleActions}, dispatch)
 )(DashboardEditor)

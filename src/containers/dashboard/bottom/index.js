@@ -29,7 +29,7 @@ import { ResourceNotLoaded } from '../../common/resource_not_loaded'
 import { isCVTypeForDesktop } from '../../../common/cv_utils'
 import { RunBy } from '../../../reducers/state'
 import { Actions as simpleActions } from '@/actions/simple_actions'
-import { getLicenseService } from '../../../services/license'
+import { openSettings } from '../../../ext/common/tab'
 
 class DashboardBottom extends React.Component {
   state = {
@@ -291,7 +291,7 @@ class DashboardBottom extends React.Component {
       return [
         'visionFind', 'visualSearch',
         'visualAssert', 'visualVerify',
-        'XClick', 'XClickText', 'XClickTextRelative', 'XMoveText', 'XMove', 'XMoveText', 'XClickRelative', 'XMoveRelative',
+        'XClick', 'XClickText', 'XClickTextRelative', 'XClickRelative', 'XMove', 'XMoveText', 'XMoveTextRelative', 'XMoveRelative',
         'OCRExtract', 'OCRExtractRelative', 'OCRExtractbyTextRelative', 'visionLimitSearchAreaRelative', 'visionLimitSearchAreabyTextRelative'
       ].indexOf(selectedCmd.cmd) !== -1
     })()
@@ -552,7 +552,7 @@ class DashboardBottom extends React.Component {
             /> */}
             <Input.Search style={{ flex: 0.8 }} placeholder="Search image" onChange={e => this.setState({ searchImageText: e.target.value })} />
           </div>
-          <a className="more-info" target="_blank" href="https://goto.ui.vision/x/idehelp?help=visual">More Info</a>
+          <a className="more-info" target="_blank" href="https://go.ui.vision/?help=visual">More Info</a>
         </div>
         {this.renderVisionTable()}
       </div>
@@ -675,11 +675,11 @@ class DashboardBottom extends React.Component {
   }
 
   logLinkPatterns = [
-    [/Error #101/i, 'https://goto.ui.vision/x/idehelp?help=error101'],
-	[/Error #120/i, 'https://goto.ui.vision/x/idehelp?help=error120'],
-	[/Error #121/i, 'https://goto.ui.vision/x/idehelp?help=error121'],
-	[/Error #170/i, 'https://goto.ui.vision/x/idehelp?help=error179'],
-	[/Error #220/i, 'https://goto.ui.vision/x/idehelp?help=error220']	
+    [/Error #101/i, 'https://go.ui.vision/?help=error101'],
+	[/Error #120/i, 'https://go.ui.vision/?help=error120'],
+	[/Error #121/i, 'https://go.ui.vision/?help=error121'],
+	[/Error #170/i, 'https://go.ui.vision/?help=error179'],
+	[/Error #220/i, 'https://go.ui.vision/?help=error220']	
   ]
 
   appendLinkIfPatternMatched (text) {
@@ -717,40 +717,6 @@ class DashboardBottom extends React.Component {
     }
 
     const content = (() => {
-      if (/XClick\/XClickText\/XClickTextRelative\/XMoveText\/XMove\/XType \d+ commands limit reached/.test(log.text) ||
-          /OCR conversion limit reached/.test(log.text) ||
-          /PROXY \d+ commands? limit reached/.test(log.text)) {
-        const licenceType = (() => {
-          if (getLicenseService().hasNoLicense()) {
-            return 'PRO'
-          }
-
-          if (getLicenseService().isPersonalLicense()) {
-            return 'PRO2 or Enterprise'
-          }
-
-          return null
-        })()
-
-        if (!licenceType) return log.text
-
-        return (
-          <span>
-            <span>{log.text}</span>
-            <a
-              href="#"
-              style={{ marginLeft: '10px' }}
-              onClick={e => {
-                e.preventDefault()
-                this.props.updateUI({ showSettings: true, settingsTab: 'register' })
-              }}
-            >
-              Get a {licenceType} license key to remove this limit
-            </a>
-          </span>
-        )
-      }
-
       if (/(XModule|xFile) is not installed yet/.test(log.text)) {
         return (
           <span>
@@ -760,7 +726,7 @@ class DashboardBottom extends React.Component {
               style={{ marginLeft: '10px' }}
               onClick={e => {
                 e.preventDefault()
-                this.props.updateUI({ showSettings: true, settingsTab: 'xmodules' })
+                openSettings('xmodules')
               }}
             >
               Install now
@@ -777,7 +743,7 @@ class DashboardBottom extends React.Component {
               href="#"
               onClick={e => {
                 e.preventDefault()
-                this.props.updateUI({ showSettings: true, settingsTab: 'ocr' })
+                openSettings('ocr')
               }}
             >
               OCR Settings
@@ -887,13 +853,13 @@ class DashboardBottom extends React.Component {
                       onClick={e => this.props.updateConfig({ showCommonInternalVariables: e.target.checked })}
                       checked={this.props.config.showCommonInternalVariables}
                     >
-                      Show most common <a href="https://goto.ui.vision/x/idehelp?help=internalvars" target="_blank">internal variables</a>
+                      Show most common <a href="https://go.ui.vision/?help=internalvars" target="_blank">internal variables</a>
                     </Checkbox>
                     <Checkbox
                       onClick={e => this.props.updateConfig({ showAdvancedInternalVariables: e.target.checked })}
                       checked={this.props.config.showAdvancedInternalVariables}
                     >
-                      Show advanced <a href="https://goto.ui.vision/x/idehelp?help=internalvars" target="_blank">internal variables</a>
+                      Show advanced <a href="https://go.ui.vision/?help=internalvars" target="_blank">internal variables</a>
                     </Checkbox>
                   </div>
                   {this.renderVariableTable()}

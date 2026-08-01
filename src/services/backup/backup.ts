@@ -1,8 +1,6 @@
 import FileSaver from '../../common/lib/file_saver'
 import JSZip from 'jszip'
-import { nameFactory } from '../../common/utils'
 import { toJSONString } from '../../common/convert_utils'
-import { stringifyTestSuite } from '../../common/convert_suite_utils'
 import { getStorageManager } from '../storage'
 import { posix as path } from '../../common/lib/path'
 import { ZipFolders } from './common'
@@ -11,13 +9,11 @@ import { MacroInState } from '@/reducers/state'
 export type BackupOptions = {
   backup: {
     testCase?:   boolean;
-    testSuite?:  boolean;
     screenshot?: boolean;
     vision?:     boolean;
     csv?:        boolean;
   };
   macroNodes?:   any[];
-  testSuites?:  any[];
   screenshots?: any[];
   csvs?:        any[];
   visions?:     any[];
@@ -25,7 +21,7 @@ export type BackupOptions = {
 }
 
 export function backup (options: BackupOptions): Promise<void> {
-  const { backup, macroNodes, testSuites, screenshots, csvs, visions } = options
+  const { backup, macroNodes, screenshots, csvs, visions } = options
   const zip = new JSZip()
   const ps  = [] as Array<Promise<any>>
 
@@ -56,22 +52,14 @@ export function backup (options: BackupOptions): Promise<void> {
 
           folder.file(fileName, toJSONString({
             name:     macro.name,
-            commands: macro.data.commands
-          }, {
+            commands: macro.data.commands,
+            // script: keep JS script macros intact (undefined for table macros)
+            script:   (macro.data as any).script
+          } as any, {
             ignoreTargetOptions: !!options.ignoreMacroTargetOptions
           }))
         })
       )
-    })
-  }
-
-  if (backup.testSuite && testSuites && testSuites.length) {
-    const folder  = zip.folder(ZipFolders.TestSuites) as JSZip
-    const genName = nameFactory()
-
-    testSuites.forEach(ts => {
-      const name = genName(ts.name)
-      folder.file(`${name}.json`, stringifyTestSuite(ts))
     })
   }
 
@@ -115,11 +103,11 @@ export function backup (options: BackupOptions): Promise<void> {
     })
   }
 
+  // the generate/save chain MUST be returned: without it backup() resolved
+  // before the ZIP existed, so callers could not report success or failure
   return Promise.all(ps)
-  .then(() => {
-    zip.generateAsync({ type: 'blob' })
-    .then(function (blob) {
-      FileSaver.saveAs(blob, 'uivision_backup.zip');
-    })
+  .then(() => zip.generateAsync({ type: 'blob' }))
+  .then((blob) => {
+    FileSaver.saveAs(blob, 'uivision_backup.zip')
   })
 }

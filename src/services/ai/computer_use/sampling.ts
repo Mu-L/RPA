@@ -36,6 +36,7 @@ export interface CallAPIReturnType {
   content: Anthropic.Beta.Messages.BetaContentBlock[]
   tool_use: ToolUse[]
   tool_use_id?: string | null
+  usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
 }
 
 // {action: "mouse_move", coordinate: [500, 200]}
@@ -172,20 +173,52 @@ class Sampling {
         throw new Error('Anthropic is not initialized')
       }
 
+      // Prompt caching: the agent loop resends the whole history (screenshots
+      // included) every turn — cache it so prior turns bill at ~0.1x instead
+      // of full price. Strip stale markers first (API allows max 4 per
+      // request), then mark only the newest block; the API finds the previous
+      // turn's cache entry via its lookback window.
+      const messagesWithCache = params.messages.map((m: any) => ({
+        ...m,
+        content: Array.isArray(m.content)
+          ? m.content.map((block: any) => {
+              if (block && typeof block === 'object' && block.cache_control) {
+                const { cache_control, ...rest } = block
+                return rest
+              }
+              return block
+            })
+          : m.content
+      }))
+      const lastMessage = messagesWithCache[messagesWithCache.length - 1]
+      if (lastMessage && Array.isArray(lastMessage.content) && lastMessage.content.length > 0) {
+        const lastIndex = lastMessage.content.length - 1
+        const lastBlock = lastMessage.content[lastIndex]
+        if (lastBlock && typeof lastBlock === 'object') {
+          lastMessage.content[lastIndex] = { ...lastBlock, cache_control: { type: 'ephemeral' } }
+        }
+      }
+
       const response = await this.anthropic.beta.messages.create({
         model: this.params.model,
         max_tokens: 1024,
         tools: [
+          // Cast: the pinned SDK's typings predate computer_20251124; the API
+          // accepts it at runtime together with the matching beta flag
           {
             type: ANTHROPIC.COMPUTER_USE_TOOL_VERSION,
             name: 'computer',
             display_width_px: width,
             display_height_px: height,
             display_number: 1
-          }
+          } as any
         ],
-        messages: params.messages,
-        system: params.system,
+        messages: messagesWithCache,
+        // System prompt as a block with cache_control: caches tools + system
+        // together (tools render before system in the cache prefix)
+        system: params.system
+          ? [{ type: 'text', text: params.system, cache_control: { type: 'ephemeral' } } as any]
+          : undefined,
         betas: [ANTHROPIC.COMPUTER_USE_BETA_FLAG]
       })
 
@@ -223,7 +256,8 @@ class Sampling {
 
       return {
         content: response.content,
-        tool_use: toolUse
+        tool_use: toolUse,
+        usage: (response as any).usage
         // tool_use_id: toolUseId
       }
     } catch (error) {
@@ -282,7 +316,7 @@ class Sampling {
         ]
       })
 
-      this.params.logMessage('Calling API', 'status')
+      this.params.logMessage(`Calling API (Anthropic ${this.params.model})`, 'status')
 
       let response: CallAPIReturnType
       try {
@@ -300,7 +334,11 @@ class Sampling {
 
       console.log('_run:>> response: ', response)
 
-      this.params.logMessage('API call complete', 'status')
+      const usage = response?.usage
+      const cachedTokens = usage?.cache_read_input_tokens || 0
+      const cachedText = cachedTokens > 0 ? ` / ${cachedTokens} cached` : ''
+      const tokenText = usage ? ` (tokens: ${usage.input_tokens ?? '?'} in${cachedText} / ${usage.output_tokens ?? '?'} out)` : ''
+      this.params.logMessage(`API call complete${tokenText}`, 'status')
 
       if (!response) {
         return this.messages

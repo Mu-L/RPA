@@ -13,7 +13,6 @@ export type RestoreBackupOptions = {
 export type RestoreBackupResult = {
   count: {
     macro:      number;
-    testSuite:  number;
     screenshot: number;
     vision:     number;
     csv:        number;
@@ -115,7 +114,6 @@ export function restoreBackup (options: RestoreBackupOptions): Promise<RestoreBa
         return {
           count: {
             macro:      results.filter((x: any) => x === StorageTarget.Macro).length,
-            testSuite:  results.filter((x: any) => x === StorageTarget.TestSuite).length,
             screenshot: results.filter((x: any) => x === StorageTarget.Screenshot).length,
             vision:     results.filter((x: any) => x === StorageTarget.Vision).length,
             csv:        results.filter((x: any) => x === StorageTarget.CSV).length
@@ -170,9 +168,6 @@ export function getStorageAndPath (options: GetStorageAndPathOptions): GetStorag
     switch (parts[0]) {
       case ZipFolders.Macros:
         return [options.manager.getMacroStorage(), StorageTarget.Macro]
-
-      case ZipFolders.TestSuites:
-        return [options.manager.getTestSuiteStorage(), StorageTarget.TestSuite]
 
       case ZipFolders.Csvs:
         return [options.manager.getCSVStorage(), StorageTarget.CSV]

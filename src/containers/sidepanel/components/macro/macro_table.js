@@ -1,6 +1,7 @@
 import {
   Button,
   Menu,
+  Modal,
   Table,
   message
 } from 'antd'
@@ -38,6 +39,7 @@ import {
   getCurrentMacroId,
   getDoneCommandIndices,
   getErrorCommandIndices,
+  getShouldIgnoreTargetOptions,
   getWarningCommandIndices,
   isFocusOnCommandTable
 } from '@/recomputed'
@@ -57,6 +59,8 @@ const newCommand = {
 const defaultDataSource = [newCommand]
 
 const ITEM_HEIGHT = config.ui.commandItemHeight
+// header row (Command/Target/Value) is flatter than the command rows
+const HEADER_HEIGHT = 26
 
 class MacroTable extends React.Component {
   _lastSelectedMacroName = null
@@ -393,10 +397,40 @@ class MacroTable extends React.Component {
   }
 
   
+  // Note: the table shares the tab pane with the docked edit form. Measure the
+  // tab scroll viewport (.ant-tabs-content-holder — its height is fixed by the
+  // panel, unlike .ant-tabs-content which grows with the table itself and would
+  // create a feedback loop) and subtract the form's current height.
   onWindowResize = () => {
-    // TODO: find a better way to calculate table width/height
-    this.setState({ tableWidth: document.querySelector('.ant-tabs-content').clientWidth})
-    this.setState({ tableHeight: document.querySelector('.ant-tabs-content').clientHeight  })
+    const $content = document.querySelector('.ant-tabs-content-holder') || document.querySelector('.ant-tabs-content')
+    if (!$content) return
+
+    const $form = document.querySelector('.sidepanel-edit-form')
+    const formHeight = $form ? $form.offsetHeight : 0
+
+    // macro title row (name + rename) sits above the table in the same pane
+    const $header = document.querySelector('.macro-header')
+    const headerHeight = $header ? $header.offsetHeight : 0
+
+    // Logs/Variables run panel docked below the edit form
+    const $runPanel = document.querySelector('.sidepanel-run-panel')
+    const runPanelHeight = $runPanel ? $runPanel.offsetHeight : 0
+
+    // Rec + "Pop out editor" toolbar at the very bottom (dev mode)
+    const $devToolbar = document.querySelector('.macro-dev-toolbar')
+    const devToolbarHeight = $devToolbar ? $devToolbar.offsetHeight : 0
+
+    const tableWidth = $content.clientWidth
+    // floor of ~3 rows: with the edit form expanded (plus run panel) on a
+    // short window the remaining space can reach 0, which renders the
+    // virtualized table as a blank area. The tab content scrolls, so keeping
+    // a minimum just pushes the docked panels below the fold instead.
+    const MIN_TABLE_HEIGHT = HEADER_HEIGHT + 3 * ITEM_HEIGHT
+    const tableHeight = Math.max(MIN_TABLE_HEIGHT, $content.clientHeight - formHeight - headerHeight - runPanelHeight - devToolbarHeight)
+
+    // only update on real changes — this also runs from a ResizeObserver
+    if (tableWidth !== this.state.tableWidth) this.setState({ tableWidth })
+    if (tableHeight !== this.state.tableHeight) this.setState({ tableHeight })
   }
 
   componentDidMount () {
@@ -407,10 +441,23 @@ class MacroTable extends React.Component {
     storage.addListener(this.handleStorageChange.bind(this))
     this.forceUpdate()
     
-    waitForRenderComplete('.ant-tabs-content').then(() => {      
-      this.setState({ tableWidth: document.querySelector('.ant-tabs-content').clientWidth })
-      this.setState({ tableHeight: document.querySelector('.ant-tabs-content').clientHeight  })      
-    })   
+    waitForRenderComplete('.ant-tabs-content').then(() => {
+      this.onWindowResize()
+
+      // re-measure when the tab area or the docked edit form changes size
+      // (e.g. user expands/collapses the form) — otherwise the table keeps its
+      // old height and pushes the form below the fold
+      if (typeof ResizeObserver !== 'undefined' && !this.resizeObserver) {
+        this.resizeObserver = new ResizeObserver(() => this.onWindowResize())
+
+        const $holder = document.querySelector('.ant-tabs-content-holder')
+        const $form = document.querySelector('.sidepanel-edit-form')
+        const $runPanel = document.querySelector('.sidepanel-run-panel')
+        if ($holder) this.resizeObserver.observe($holder)
+        if ($form) this.resizeObserver.observe($form)
+        if ($runPanel) this.resizeObserver.observe($runPanel)
+      }
+    })
 
   }
 
@@ -419,6 +466,19 @@ class MacroTable extends React.Component {
     document.removeEventListener('click', this.onDoubleClick)
     document.removeEventListener('keydown', this.onKeyDown)
     window.removeEventListener('resize', this.onWindowResize)
+
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect()
+      this.resizeObserver = null
+    }
+  }
+
+  componentDidUpdate (prevProps) {
+    // the Macro pane is display:none while another tab is active, so measuring
+    // at mount time can yield 0 — re-measure when this tab becomes visible
+    if (prevProps.ui.sidebarTab !== this.props.ui.sidebarTab && this.props.ui.sidebarTab === 'Macro') {
+      this.onWindowResize()
+    }
   }
 
   getMacroName () {
@@ -441,20 +501,23 @@ class MacroTable extends React.Component {
     //   )
     // }
 
+    // Note: the virtual grid may not be rendered yet (e.g. Macro tab never
+    // activated, table height still 0) — updating scroll position is optional,
+    // but throwing here would unmount the whole side panel
     const tableNode = this.getMacroTableContainer();
     if (nextProps.status === C.APP_STATUS.PLAYER) {
       if (nextProps.player.nextCommandIndex === 0) {
         this._lastSelectedMacroName = this.getMacroName()
-        tableNode.scrollTop = 0
+        if (tableNode) tableNode.scrollTop = 0
       } else if (nextProps.player.nextCommandIndex !== this.props.player.nextCommandIndex) {
         const itemHeight = ITEM_HEIGHT
         const scrollTop = itemHeight * nextProps.player.nextCommandIndex
-        tableNode.scrollTop = scrollTop
+        if (tableNode) tableNode.scrollTop = scrollTop
       }
     } else if (this._lastSelectedMacroName !== this.getMacroName()) {
       // bring scroll position to top when new macro selected
       this._lastSelectedMacroName = this.getMacroName()
-      tableNode.scrollTop = 0
+      if (tableNode) tableNode.scrollTop = 0
     }
   }
 
@@ -581,6 +644,74 @@ class MacroTable extends React.Component {
     }
   }
 
+  // opens the docked command editor below the table — a dev-mode panel, so
+  // outside dev mode the user is told that dev mode gets switched on
+  onClickEditInSidebar = (commandIndex) => {
+    const expandEditForm = () => {
+      this.props.selectCommand(commandIndex, true)
+      window.dispatchEvent(new CustomEvent('sidepanelExpandEditForm'))
+    }
+
+    if (this.props.config.sidebarDevMode) {
+      return expandEditForm()
+    }
+
+    Modal.info({
+      title: 'Edit in sidebar',
+      content: 'This turns on Dev mode',
+      okText: 'Ok',
+      onOk: () => {
+        this.props.updateConfig({ sidebarDevMode: true })
+        // wait for the dev-mode panels (edit form) to mount
+        setTimeout(expandEditForm, 100)
+      }
+    })
+  }
+
+  // switch the Macro tab to the source view and select the JSON lines of the
+  // given command (side panel twin of the IDE's "Jump to source code")
+  jumpToSourceCode = (commandIndex) => {
+    this.props.setEditorActiveTab('source_view')
+
+    // wait for the source view (and its CodeMirror) to mount
+    setTimeout(() => {
+      const { commands } = this.props.editing
+      const $cm = document.querySelector('.sidepanel-source-view .CodeMirror')
+      if (!$cm || !$cm.CodeMirror || !commands || !commands[commandIndex]) return
+
+      const instance = $cm.CodeMirror
+      // lines before the first command: {, "Name", "CreationDate", "Commands": [
+      const headingLineCount = 4
+      const ch = 0
+
+      // a command serializes to 6 lines ({, Command, Target, Value,
+      // Description, }) plus its Targets block when target options are kept
+      const ignoreTargetOptions = this.props.shouldIgnoreTargetOptions
+      const lineCountForCommand = (command) => {
+        return 6 + (!ignoreTargetOptions && command.targetOptions ? (command.targetOptions.length + 2) : 0)
+      }
+
+      let startLine = headingLineCount
+
+      for (let i = 0; i < commandIndex; i++) {
+        startLine += lineCountForCommand(commands[i])
+      }
+
+      const endLine = startLine + lineCountForCommand(commands[commandIndex])
+
+      const $view = document.querySelector('.sidepanel-source-view')
+      const viewHeight = $view ? parseInt(window.getComputedStyle($view).height, 10) : 300
+      const margin = Math.max(0, (viewHeight - 60) / 2)
+
+      instance.scrollIntoView({ ch, line: startLine }, margin)
+      instance.setSelection(
+        { ch, line: startLine },
+        { ch, line: endLine },
+        { scroll: false }
+      )
+    }, 150)
+  }
+
   renderVisionFindPreview () {
     const { visible, url, left, top } = this.state.visionFindPreview
     if (!visible) return null
@@ -618,15 +749,37 @@ class MacroTable extends React.Component {
       return null
     }
 
-    let x     = contextMenu.x + container.scrollLeft
-    let y     = contextMenu.y + (container.scrollTop || 0) - otherItemsHeight;
+    // keep the menu inside the visible tab area — opened near the bottom it
+    // would otherwise run past the edge and get cut off. Height estimate
+    // matches the items array below: 36px per item (see macro.scss),
+    // ~9px per divider, plus menu padding.
+    const itemCount = this.props.config.sidebarDevMode ? 12 : 11
+    const menuHeight = itemCount * 36 + 3 * 9 + 10
+    const $holder = document.querySelector('.ant-tabs-content-holder')
+    const visibleRect = ($holder || container).getBoundingClientRect()
+
+    // clamp in viewport space first ...
+    let vx = contextMenu.x
+    let vy = contextMenu.y
+
+    if (vy + menuHeight > visibleRect.bottom - 8) {
+      vy = Math.max(visibleRect.top + 8, visibleRect.bottom - 8 - menuHeight)
+    }
+
+    if (vx + mw > dw) vx -= mw
+    if (vx < 0) vx = 10
+
+    // ... then convert to coordinates of the menu's positioned ancestor
+    // (.macro-table-area) — its rect already reflects any scrolling, so no
+    // scrollTop/offset guesswork is needed
+    const $area = document.querySelector('.macro-table-area')
+    const areaRect = $area ? $area.getBoundingClientRect() : { left: 0, top: otherItemsHeight }
+    const x = vx - areaRect.left
+    const y = vy - areaRect.top
 
     if (!isNormal) {
       return null
     }
-
-    if (x + mw > dw) x -= mw
-    if (x < 0) x = 10
 
     const style = {
       position: 'absolute',
@@ -636,13 +789,32 @@ class MacroTable extends React.Component {
     }
 
     const menuStyle = {
-      width: mw + 'px'
+      width: mw + 'px',
+      // last resort on very short windows: scroll inside the menu itself
+      maxHeight: Math.max(150, visibleRect.height - 16) + 'px',
+      overflowY: 'auto'
     }
 
     const { commandIndex } = contextMenu
+    const isBreakpoint = this.props.breakpointIndices.indexOf(commandIndex) !== -1
+    const canEdit = getLicenseService().canPerform(Feature.Edit)
 
     const handleClick = (e) => {
       switch (e.key) {
+        case 'cut':
+          return this.props.cutCommand(commandIndex)
+        case 'copy':
+          return this.props.copyCommand(commandIndex)
+        case 'paste':
+          return this.props.pasteCommand(commandIndex)
+        case 'insert':
+          return this.props.insertCommand(newCommand, commandIndex + 1)
+        case 'delete':
+          return this.props.removeCommand(commandIndex)
+        case 'add_breakpoint':
+          return this.props.addBreakpoint(this.props.macroId, commandIndex)
+        case 'remove_breakpoint':
+          return this.props.removeBreakpoint(this.props.macroId, commandIndex)
         case 'run_line': {
           return this.playLine(commandIndex)
         }
@@ -681,6 +853,12 @@ class MacroTable extends React.Component {
             breakpoints: [commandIndex]
           })
         }
+        case 'jump_to_source_code': {
+          return this.jumpToSourceCode(commandIndex)
+        }
+        case 'edit_in_sidebar': {
+          return this.onClickEditInSidebar(commandIndex)
+        }
         case 'edit_in_ide': {
           this.onClickEditInIDE(this.props.macroId, commandIndex)
         }
@@ -697,10 +875,53 @@ class MacroTable extends React.Component {
           mode="vertical" 
           selectable={false}
           items={[
+            {
+              key: 'cut',
+              label: (
+                <>
+                  <span>Cut</span>
+                  <span className="shortcut">{ctrlKey}X</span>
+                </>
+              ),
+              disabled: !canEdit
+            },
+            {
+              key: 'copy',
+              label: (
+                <>
+                  <span>Copy</span>
+                  <span className="shortcut">{ctrlKey}C</span>
+                </>
+              ),
+              disabled: !canEdit
+            },
+            {
+              key: 'paste',
+              label: (
+                <>
+                  <span>Paste</span>
+                  <span className="shortcut">{ctrlKey}V</span>
+                </>
+              ),
+              disabled: !canEdit || clipboard.commands.length === 0
+            },
+            { key: 'delete', label: 'Delete', disabled: !canEdit },
+            { type: 'divider' },
+            { key: 'insert', label: 'Insert new line', disabled: !canEdit },
+            {
+              key: isBreakpoint ? 'remove_breakpoint' : 'add_breakpoint',
+              label: isBreakpoint ? 'Remove breakpoint' : 'Add breakpoint'
+            },
+            { type: 'divider' },
             { key: 'run_line', label: 'Execute this command' },
             { key: 'play_from_here_keep_variables', label: 'Play from here and keep variables' },
             { key: 'play_to_here', label: 'Play to this point' },
             { type: 'divider' },
+            // the source view is a dev-mode feature (see macro/index.js)
+            ...(this.props.config.sidebarDevMode
+              ? [{ key: 'jump_to_source_code', label: 'Jump to source' }]
+              : []),
+            { key: 'edit_in_sidebar', label: 'Edit (in sidebar)' },
             { key: 'edit_in_ide', label: 'Edit (in IDE)' }
           ]}
         />
@@ -739,15 +960,20 @@ class MacroTable extends React.Component {
 
     const  { columnWidths, tableWidth, headerWidthPatchFactor, tableHeight } = this.state;
     let itemHeight = ITEM_HEIGHT;
+    // shrink-to-fit: a short macro only takes the height its rows need, so the
+    // edit form docks right below the last command instead of far below;
+    // long macros are capped at the available height and scroll internally
+    const naturalHeight = dataSource.length * itemHeight + HEADER_HEIGHT
+    const fitHeight = Math.min(tableHeight, naturalHeight)
     return (
       <div className="t-body">
         {!this.listContainer ? null : (
           <RcvTable
             width={tableWidth}
-            height= {tableHeight}
+            height= {fitHeight}
             // style={{ height: 'calc(100% - 40px)' }}
             className='command-table'
-            headerHeight={ITEM_HEIGHT}
+            headerHeight={HEADER_HEIGHT}
             rowHeight={ITEM_HEIGHT}
             rowCount={dataSource.length}
             rowGetter={({ index }) => dataSource[index] || { key: index }}
@@ -863,6 +1089,7 @@ export default connect(
     errorCommandIndices: getErrorCommandIndices(state),
     warningCommandIndices: getWarningCommandIndices(state),
     macroId: getCurrentMacroId(state),
+    shouldIgnoreTargetOptions: getShouldIgnoreTargetOptions(state),
     canUseKeyboardShortcuts: isFocusOnCommandTable(state)
   }),
   dispatch => bindActionCreators({...actions, ...simpleActions}, dispatch)

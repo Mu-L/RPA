@@ -9,6 +9,8 @@ import csIpc from './common/ipc/ipc_cs'
 import Header from './components/header'
 import Sidebar from './containers/sidebar'
 import DashboardPage from './containers/dashboard'
+import AiChat from './containers/sidepanel/components/ai_chat'
+import { resizeIdeWindowForAiChat } from './ext/common/tab'
 import { Actions } from '@/actions/simple_actions'
 import { store } from './redux'
 
@@ -19,7 +21,7 @@ import { FocusArea } from './reducers/state'
 import { isNoDisplay, isOcrInDesktopMode, isReplaySpeedOverrideToFastMode } from './recomputed'
 import { getPlayer } from './common/player'
 import storage from '@/common/storage'
-import { delayMs, waitForRenderComplete } from './common/utils'
+import { cn, delayMs, waitForRenderComplete } from './common/utils'
 import { Actions as simpleActions } from '@/actions/simple_actions'
 import config from '@/config'
 
@@ -44,6 +46,65 @@ class App extends Component {
     this.props.updateUI({ focusArea: FocusArea.Unknown })
   }
 
+  onCloseAiChat = () => {
+    this.props.updateConfig({ showIdeAiChat: false })
+    resizeIdeWindowForAiChat(false, this.props.ideAiChatWidth)
+  }
+
+  getAiChatWidth = () => {
+    const w = this.props.ideAiChatWidth || 320
+    return Math.max(260, Math.min(700, w))
+  }
+
+  // same drag-to-resize as the macro tree view (containers/sidebar): HTML5
+  // drag on a thin strip, width applied on dragEnd from the screenX delta
+  // (screenX, not clientX — Firefox reports clientX 0 on dragend)
+  onAiResizeDragStart = (e) => {
+    // Firefox requires data in DataTransfer, otherwise dragEnd never fires
+    e.dataTransfer.setData('text', '')
+    this._aiDrag = {
+      startX: e.screenX,
+      startWidth: this.getAiChatWidth()
+    }
+    this.setState({ aiChatResizing: true })
+  }
+
+  onAiResizeDragEnd = (e) => {
+    // handle sits on the LEFT edge: dragging left (negative delta) widens
+    const diff = this._aiDrag.startX - e.screenX
+    const width = Math.max(260, Math.min(700, this._aiDrag.startWidth + diff))
+    this.setState({ aiChatResizing: false })
+    this.props.updateConfig({ ideAiChatWidth: width })
+  }
+
+  // the chat shows its own inline status while the agent works; the IDE has
+  // no sidebar-style status bar to mirror it into
+  renderAiChatStatus = () => {}
+
+  // same chat as the side panel's AI Chat tab, docked right of the editor —
+  // more room, and the user watches the agent edit/run the macro live
+  renderAiChatPanel () {
+    if (!this.props.showIdeAiChat) return null
+
+    const width = this.getAiChatWidth() + 'px'
+
+    return (
+      <aside className="ide-ai-chat-panel" style={{ width, minWidth: width }}>
+        <div
+          className={cn('resize-handler', { focused: this.state && this.state.aiChatResizing })}
+          draggable="true"
+          onDragStart={this.onAiResizeDragStart}
+          onDragEnd={this.onAiResizeDragEnd}
+        />
+        <div className="ide-ai-chat-title">
+          <span>AI Chat ✨</span>
+          <Button type="text" size="small" title="Hide AI Chat" onClick={this.onCloseAiChat}>✕</Button>
+        </div>
+        <AiChat renderStatus={this.renderAiChatStatus} />
+      </aside>
+    )
+  }
+
   getPlayer = (name) => {
     if (name) return getPlayer({ name })
 
@@ -56,25 +117,23 @@ class App extends Component {
     }
   }
 
-  handleStorageChange = ([changes]) => {
-    if (changes.key === 'config') {
-      if (changes.newValue.showSettingsOnStart) {
-        this.props.updateUI({ showSettings: true })
-      } 
-    }
-  }
-
   componentDidMount () {
-    this.props.updateConfig({ ["oneTimeShowSidePanel"]: null }) 
+    this.props.updateConfig({ ["oneTimeShowSidePanel"]: null })
 
-    if (this.props.showSettingsOnStart) {
-      this.props.updateUI({ showSettings: true })     
-      this.props.updateConfig({
-        showSettingsOnStart: false
-      })
-    }
-
-    storage.addListener(this.handleStorageChange)
+    // The AI chat opening by default (fresh users, no saved choice) squeezes
+    // the editor to its 520px minimum — its content wraps a few lines taller
+    // and .content's overflow-y shows a scrollbar on the chat border even
+    // though nothing meaningful scrolls. Widen the window ONCE for that case;
+    // explicit toggles already resize, and the persisted flag keeps the
+    // window from creeping wider on every start.
+    storage.get('config').then(config => {
+      config = config || {}
+      const panelOpen = config.showIdeAiChat !== false
+      if (panelOpen && !config.ideAiChatAutoWidened) {
+        this.props.updateConfig({ ideAiChatAutoWidened: true })
+        resizeIdeWindowForAiChat(true, config.ideAiChatWidth)
+      }
+    })
 
     if (this.props.selectCommandIndex !== undefined && this.props.selectCommandIndex !== null) {
       delayMs(500).then(() => {
@@ -108,37 +167,6 @@ class App extends Component {
     clearInterval(this.timer)
   }
 
-  renderPreinstallModal () {
-    if (!this.props.ui.newPreinstallVersion)  return null
-
-    return (
-      <Modal
-        className="preinstall-modal"
-        open={true}
-        title="New demo macros available"
-        okText="Yes, overwrite"
-        cancelText="Skip"
-        onOk={() => {
-          this.props.updateUI({ newPreinstallVersion: false })
-
-          return this.props.preinstall(true)
-          .then(() => {
-            message.success('demo macros updated')
-          })
-          .catch(e => {
-            message.error(e.message)
-          })
-        }}
-        onCancel={() => {
-          this.props.updateUI({ newPreinstallVersion: false })
-          this.props.preinstall(false)
-        }}
-      >
-        <p style={{ fontSize: '14px' }}>Do you want to overwrite the demo macros with their latest versions?</p>
-      </Modal>
-    )
-  }
-
   showGUI = () => {
     store.dispatch(Actions.setNoDisplayInPlay(false))
     // set fast mode
@@ -154,7 +182,7 @@ class App extends Component {
       return (
         <div className="app no-display">
           <div className="content">
-            <div className="status">UI.Vision is in "No Display" mode now</div>
+            <div className="status">Ui.Vision is in "No Display" mode now</div>
             <Button.Group className="simple-actions">
               <Button size="large" onClick={() => this.getPlayer().stop()}>
                 <span>Stop</span>
@@ -172,7 +200,7 @@ class App extends Component {
     }
 
     return (
-      <div className="app with-sidebar" ref={el => { this.$app = el }}>
+      <div className={cn('app', 'with-sidebar')} ref={el => { this.$app = el }}>
         <div className="backup-alert">
           <span>Do you want to run the automated backup?</span>
           <span className="backup-actions">
@@ -181,17 +209,18 @@ class App extends Component {
           </span>
         </div>
         <div className="app-inner">
+          {/* the macro tree is always shown in the IDE window */}
           <Sidebar />
           <section
             className="content"
             onClickCapture={this.onClickMainArea}
           >
             <Header />
-            <DashboardPage />  
+            <DashboardPage />
           </section>
+          {this.renderAiChatPanel()}
         </div>
 
-        {this.renderPreinstallModal()}
         
         {this.props.ocrInDesktopMode ? (
           <div className="app no-display ocr-overlay">
@@ -223,8 +252,11 @@ export default connect(
     noDisplay: isNoDisplay(state),
     ocrInDesktopMode: isOcrInDesktopMode(state),
     replaySpeedOverrideToFastMode: isReplaySpeedOverrideToFastMode(state),
-    showSettingsOnStart: state.config.showSettingsOnStart,
-    selectCommandIndex: state.config.selectCommandIndex
+    selectCommandIndex: state.config.selectCommandIndex,
+    // default OPEN: new users see the AI chat right away; closing it once
+    // (header toggle / panel ✕ writes false) keeps it closed for good
+    showIdeAiChat: state.config.showIdeAiChat !== false,
+    ideAiChatWidth: state.config.ideAiChatWidth
   }),
   dispatch => bindActionCreators({...actions, ...simpleActions}, dispatch)
 )(App)
