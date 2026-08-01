@@ -14,12 +14,14 @@ import { getPlayTab } from '@/ext/common/tab'
 import { goUivUrl } from '@/common/uiv_link'
 import getSaveTestCase from '@/components/save_test_case'
 import { isScriptMacroView } from '@/recomputed'
+import { getLicenseService } from '@/services/license'
+import { Feature } from '@/services/license/types'
 
 // sidebar recordings are stored in this scratch macro, never in the macro the
 // user happens to have open
 const RECORD_SCRATCH_MACRO = '#current'
 
-// Rec, docked at the bottom of the Macro tab (dev mode
+// Rec + "+ Macro", docked at the bottom of the Macro tab (dev mode
 // only). Living inside the tab â€” instead of in the shared bottom control
 // bar â€” keeps the status bar and play controls at a constant height when
 // tabs change or dev mode toggles. Logic moved from controlbar/index.js.
@@ -83,6 +85,17 @@ class DevToolbar extends React.Component {
       } else {
         resolve(true)
       }
+    })
+  }
+
+  // Starting a macro from scratch is a dev-mode move — everyone else describes
+  // it in AI Chat — so this button lives here next to Rec rather than in the
+  // Files tab. macroCreateFile asks for the name, writes the JS starter script
+  // and switches the editor to the new macro; saveOrNot first so the open one
+  // isn't lost on the way.
+  addTestCase = () => {
+    return getSaveTestCase().saveOrNot().then(() => {
+      this.props.macroCreateFile({ dir: '/' })
     })
   }
 
@@ -168,6 +181,20 @@ class DevToolbar extends React.Component {
         >
           <FontAwesomeIcon icon={faCircleDot} />
           <span> {isRecording ? 'Stop' : 'Rec'}</span>
+        </Button>
+        <Button
+          className="new-macro-button"
+          // switching macros mid-run would pull the macro out from under the
+          // player/recorder, so this waits like Rec does
+          disabled={
+            isRecording ||
+            this.props.player.status !== C.PLAYER_STATUS.STOPPED ||
+            !getLicenseService().canPerform(Feature.Edit)
+          }
+          title="Create a new macro"
+          onClick={this.addTestCase}
+        >
+          <span>+ Macro</span>
         </Button>
       </div>
     )

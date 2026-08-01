@@ -151,7 +151,8 @@
     // auto-wait countdown, shown while a finder waits. Unlike the other rows
     // this one WRAPS: the label carries the locator that is being waited for,
     // and an ellipsised xpath tells the user nothing about why they are
-    // waiting. Two lines max, so the bar cannot grow without bound.
+    // waiting. Two lines max, so the bar cannot grow without bound — the
+    // countdown leads the sentence so the clamp only ever eats the label.
     .status-wait {
       max-width: 100%;
       font-size: 11px;
@@ -164,6 +165,7 @@
       -webkit-box-orient: vertical;
       -webkit-line-clamp: 2;
       word-break: break-word;
+      font-variant-numeric: tabular-nums; // no twitching as the digits tick down
     }
 
     // latest log entry, shown while a macro is running; click opens Logs tab

@@ -1549,6 +1549,9 @@ async function prepareRunMacro (code) {
 // the user hands to uiv.run stays on the player path, whatever it is.
 const FAST_PATH_COMMANDS = /^(click|type|BClick|BType|BMove|XClick|XType|XMove|executeScript)$/i
 
+// ${!URL} written into a command a SCRIPT issues — see runOneCommand
+const URL_VAR_IN_TEXT = /\$\{\s*!url\s*\}/i
+
 let scriptSessionActive = false
 
 // The player's stop handler puts the app back into NORMAL status and tells the
@@ -1755,6 +1758,21 @@ async function runOneCommand (cmd, target, value, cmdFields, opts) {
 
   if (state.player.status !== Player.C.STATUS.STOPPED) {
     return { ok: false, error: 'E900: another macro is already running' }
+  }
+
+  // Every command a script issues gets its target/value variable-rendered on
+  // the way out (askBackgroundToRunCommand), so ${!URL} would resolve here the
+  // same way getVar('!URL') would — to the PREVIOUS page. getVar already
+  // refuses it (DEPRECATED_VARIABLES); this closes the render-time door, which
+  // is not just uiv.run: uiv.page.type(locator, '${!URL}') renders too.
+  if (URL_VAR_IN_TEXT.test(`${target || ''}\n${value || ''}`)) {
+    return {
+      ok: false,
+      error: `'\${!URL}' cannot be used in a JS script (here: ${cmd}) — !URL is only refreshed by the classic player, ` +
+        'so in a script it holds the PREVIOUS page. Read the page first and pass the string: ' +
+        "var url = uiv.eval('return location.href'). " +
+        '(On a page that cannot run scripts, uiv.tabs.list() carries a url per tab.)'
+    }
   }
 
   const src = state.editor.editing.meta.src
@@ -3580,7 +3598,7 @@ function buildInterpreter (code) {
           const key = String(name).trim()
 
           if (!key) {
-            return interp.nativeToPseudo({ ok: false, error: "getVar: needs a variable name, e.g. uiv.getVar('!URL')" })
+            return interp.nativeToPseudo({ ok: false, error: "getVar: needs a variable name, e.g. uiv.getVar('!CURRENT_TAB_NUMBER')" })
           }
 
           // Replaced by a finder that returns the value directly.

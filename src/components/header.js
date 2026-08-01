@@ -31,7 +31,7 @@ import Ext from "../common/web_extension";
 import { getState, updateState } from "../ext/common/global_state";
 import { getPlayTab, openSettings, resizeIdeWindowForAiChat } from "../ext/common/tab";
 import { isScriptPaused, isScriptRunning, onScriptEvent, pauseScript, resumeScript, runScript, stepScript, stopScript } from "../modules/script_runner";
-import { hasUnsavedMacro } from "../recomputed";
+import { hasUnsavedMacro, isScriptMacroView } from "../recomputed";
 import { getLicenseService } from "../services/license";
 import { Feature } from "../services/license/types";
 import "./header.scss";
@@ -110,7 +110,7 @@ class Header extends React.Component {
     }
 
     const tabInfo = await this.getCurrentRecordedtab();
-    if (!/^(https?:|file:)/.test(tabInfo.url)) {
+    if (!tabInfo || !/^(https?:|file:)/.test(tabInfo.url)) {
       return message.error(
         "Web recording works only on normal browser pages. For other pages, please use desktop automation."
       );
@@ -118,15 +118,11 @@ class Header extends React.Component {
 
     if (this.props.status === C.APP_STATUS.RECORDER) {
       this.props.stopRecording();
-      // Note: remove targetOptions from all commands
-      this.props.normalizeCommands();
-    } else if (this.isScriptMacro()) {
-      // recording appends table commands to the open macro — mixing those
-      // into a JS script macro would corrupt it
-      return message.info(
-        "Recording is not available for JS script macros. Use the Select / Find buttons in the JS editor, or ask the AI chat to build the script.",
-        3.5
-      );
+      // Note: remove targetOptions from all commands (table recordings only —
+      // a JS recording writes script lines, there are no commands to touch)
+      if (!this.props.isScriptView) {
+        this.props.normalizeCommands();
+      }
     } else {
       console.log('startRecording:>> askPermission')
       const permissionResult = await this.askPermission()
@@ -537,17 +533,19 @@ class Header extends React.Component {
       case C.PLAYER_STATUS.STOPPED: {
         return (
           <div className="actions">
-            {/* recording produces table commands — meaningless inside a JS
-                script macro, so the button hides there */}
-            {!this.isScriptMacro() ? (
-              <Button
-                disabled={!getLicenseService().canPerform(Feature.Record)}
-                onClick={this.onToggleRecord}
-              >
-                <FontAwesomeIcon icon={faCircleDot} />
-                <span> Record</span>
-              </Button>
-            ) : null}
+            {/* recording works in both editors: the JS view appends each
+                action as a uiv.* line, the table view as a command row
+                (see RECORD_ADD_COMMAND in src/index.js) */}
+            <Button
+              disabled={!getLicenseService().canPerform(Feature.Record)}
+              title={this.props.isScriptView
+                ? "Record — browser actions are appended to the script as uiv.* lines"
+                : "Record"}
+              onClick={this.onToggleRecord}
+            >
+              <FontAwesomeIcon icon={faCircleDot} />
+              <span> Record</span>
+            </Button>
 
             <Button.Group className="play-actions">
               <Button type="primary" title="Play the macro" onClick={() => this.playCurrentMacro(false)}>
@@ -701,6 +699,9 @@ export default connect(
     config: state.config,
     ui: state.ui,
     proxy: state.proxy,
+    // same answer as the JS editor / the recorder's own routing, so Record
+    // never disagrees with where the recorded lines land
+    isScriptView: isScriptMacroView(state),
   }),
   (dispatch) => bindActionCreators({ ...actions, ...simpleActions }, dispatch)
 )(withRouter(Header));

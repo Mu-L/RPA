@@ -10,8 +10,9 @@
 // a backtick must be written \` and an interpolation \${...} — and the demo
 // itself must not use async/await (every uiv.* call already waits).
 
-// Starter script: shown in the empty JS editor and used as the template for
-// "New macro" in JS-first mode — a runnable mini tutorial of the uiv.* API.
+// Starter script: shown in the never-saved Untitled JS editor — a runnable
+// mini tutorial of the uiv.* API. "+ Macro" does NOT use this; a macro the
+// user explicitly asked for starts empty (see NEW_MACRO_SCRIPT below).
 export const STARTER_SCRIPT = `// Ui.Vision JS script - modern JavaScript
 // (let/const, arrows, \`template literals\`, destructuring, for...of, classes;
 //  no async/await - every uiv.* call already waits for its command)
@@ -34,7 +35,8 @@ export const STARTER_SCRIPT = `// Ui.Vision JS script - modern JavaScript
 //     const p = uiv.page, b = uiv.browser, x = uiv.desktop;
 //     p.type('id=email', 'a@b.com');  b.click(uiv.findImage('buy.png'));
 // NAVIGATE: uiv.open(url)   uiv.eval('return document.title')
-// MISC: uiv.log(msg, 'green')   uiv.sleep('1s')   uiv.getVar('!URL')   uiv.setVar('n', 1)
+//           the current URL is uiv.eval('return location.href') — !URL is table-macros-only
+// MISC: uiv.log(msg, 'green')   uiv.sleep('1s')   uiv.getVar('!CURRENT_TAB_NUMBER')   uiv.setVar('n', 1)
 //       uiv.exit('reason')  -> end the run EARLY AS A SUCCESS (guard clauses;
 //       a failed check still uses throw new Error(...))
 // Long forms with options: uiv.findElements / findImages / ocr.findTexts
@@ -55,6 +57,14 @@ if (headlines.length > 0 && uiv.getVar('!BROWSER') !== 'firefox') {
   // hover the first one — CDP input, so Chrome/Edge only
   uiv.browser.move(headlines[0]);
 }
+`
+
+// What "+ Macro" writes. Deliberately NOT the starter script above: that one
+// is a tutorial to read, and having to delete 40 lines of it before writing
+// anything is the wrong way to begin a macro you already know you want. The
+// tutorial still greets the never-saved Untitled editor, where there is
+// nothing else to show.
+export const NEW_MACRO_SCRIPT = `// New macro — runnable uiv.* examples are in the Demos folder
 `
 
 // The three macros a FRESH INSTALL ships with (written to the tree root as
@@ -1012,7 +1022,9 @@ uiv.log('DemoIfElse (JS) completed', 'green');
 // uiv.* equivalent: reading the page IS what JavaScript does.
 uiv.open('https://ui.vision/demo/executescript');
 
-uiv.log(\`Current page URL = \${uiv.getVar('!URL')}\`);
+// The classic macro reads \${!URL} here. In a script that variable is only
+// refreshed by the classic player, so it lags behind the page — ask the page.
+uiv.log(\`Current page URL = \${uiv.eval('return location.href')}\`);
 uiv.log('This macro shows various ways to extract and save data from a website');
 
 // --- attributes: classic storeAttribute -------------------------------------

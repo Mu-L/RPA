@@ -16,7 +16,7 @@ import config from '../config'
 import { StorageManager, StorageStrategyType } from '../services/storage'
 import { getXFile } from '../services/xmodules/xfile'
 import { resizeViewportOfTab } from '../common/resize_window'
-import { getIpcCache } from '../common/ipc/ipc_cache'
+import { ensureIpcSessionId, getIpcCache } from '../common/ipc/ipc_cache'
 import { getTab, getCurrentTab, activateTab, updateUrlForTab, getAllTabs } from '../common/tab_utils'
 import { runInDesktopScreenshotEditor } from '../desktop_screenshot_editor/service'
 import { DesktopScreenshot } from '../desktop_screenshot_editor/types'
@@ -2373,6 +2373,13 @@ const onRequestAsync = async (cmd, args) => {
 }
 
 const initIPC = async () => {
+  // First: every cache entry is stamped with the session it was created in, and
+  // reads ignore the rest. Must happen before cleanup (which drops entries from
+  // earlier sessions) and before bgInit accepts the first CONNECT (whose entry
+  // has to carry the current session). A woken service worker finds the same id
+  // and keeps its live entries — see ipc_cache.ts.
+  await ensureIpcSessionId()
+
   const tabs = await getAllTabs()
   const tabIdDict = tabs.reduce((prev, cur) => {
     prev[cur.id] = true

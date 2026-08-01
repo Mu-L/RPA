@@ -352,7 +352,11 @@ class Sidepanel extends React.Component {
           // deadline waits (finders, page loads, downloads) end in a timeout
           <Tooltip title={`${scriptWait.label} — ${scriptWait.remainingS}s ${scriptWait.countdownOnly ? 'left' : 'until timeout'}`}>
             <span className="status-wait">
-              Waiting: {scriptWait.label} — {scriptWait.remainingS}s {scriptWait.countdownOnly ? 'left' : 'until timeout'}
+              {/* countdown before the label, so the part that wraps away is the
+                  tail of the label and never the seconds-remaining — a long
+                  label (an "open" carries up to 60 chars of url) used to fill
+                  both clamped lines and push the countdown out of sight */}
+              Waiting {scriptWait.remainingS}s {scriptWait.countdownOnly ? 'left' : 'until timeout'} — {scriptWait.label}
             </span>
           </Tooltip>
         ) : lastLogText ? (

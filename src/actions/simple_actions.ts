@@ -10,7 +10,7 @@ import { prompt } from '@/components/prompt'
 import log from '@/common/log'
 import storage from '../common/storage'
 import { saveEditingAsExisted,editTestCase, editNewTestCase, setMacrosExtra, findSamePathMacro, saveEditing, updateMacroPlayStatus, updateUI,selectCommand, copyCommand, cutCommand, pasteCommand, addLog, addTestCases, listCSV, listVisions } from './index'
-import { getCurrentMacroId, getMacroFileNodeData, getMacrosExtra, getMacroFileNodeList, findMacroNodeWithCaseInsensitiveFullPath, getMacroFolderNodeList, getFilteredMacroFileNodeData, findMacroNodeWithCaseInsensitiveRelativePath, getShouldIgnoreTargetOptions } from '@/recomputed'
+import { getCurrentMacroId, getMacroFileNodeData, getMacrosExtra, getMacroFileNodeList, findMacroNodeWithCaseInsensitiveFullPath, getMacroFolderNodeList, getFilteredMacroFileNodeData, findMacroNodeWithCaseInsensitiveRelativePath, getShouldIgnoreTargetOptions, isJsFirstMode } from '@/recomputed'
 import { FileNodeData, FileNodeType } from '@/components/tree_file'
 import { MacroExtraData } from '@/services/kv_data/macro_extra_data'
 import { uniqueName, sanitizeFileName, arrayBufferToString } from '@/common/utils'
@@ -22,7 +22,7 @@ import { UNTITLED_ID } from '@/common/constant'
 import getSaveTestCase from '@/components/save_test_case'
 import FileSaver from '@/common/lib/file_saver'
 import { canCommandRunMacro, canCommandReadCsv, canCommandReadImage, parseImageTarget } from '@/common/command'
-import { STARTER_SCRIPT } from '@/config/preinstall_js_scripts'
+import { NEW_MACRO_SCRIPT } from '@/config/preinstall_js_scripts'
 import JSZip from 'jszip'
 import { Command } from '@/services/player/macro'
 import config from '@/config'
@@ -323,9 +323,9 @@ export const ActionFactories = {
         onCancel: () => Promise.resolve(true),
         onOk: (macroName: string) => {
           // A new macro is always a JS script macro — .js name suffix (drives
-          // the tree badge) and the runnable starter script inside. Classic
-          // macros are still fully supported; they are just not what you get
-          // when you ask for a blank one.
+          // the tree badge) and an empty script inside. Classic macros are
+          // still fully supported; they are just not what you get when you ask
+          // for a blank one.
           const finalName = !/\.js$/i.test(macroName)
             ? `${macroName}.js`
             : macroName
@@ -347,7 +347,7 @@ export const ActionFactories = {
               name: finalName,
               data: {
                 commands: [],
-                ...(isJsFirst ? { script: STARTER_SCRIPT } : {})
+                ...(isJsFirstMode(getState()) ? { script: NEW_MACRO_SCRIPT } : {})
               }
             })
             .then(

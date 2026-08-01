@@ -86,6 +86,30 @@ export const openBgWithCs = (cuid) => {
             cmd,
             args
           })
+          .then((received) => {
+            // A live content script answers this message synchronously with
+            // `true` (see the onMessage listener in ipcCs below), so `undefined`
+            // means there is no receiver: the tab never had a content script, or
+            // the one it had died with the previous extension instance (every
+            // reload/update orphans them; only a page load brings a new one).
+            //
+            // web_extension.js deliberately swallows "Could not establish
+            // connection. Receiving end does not exist" — it RESOLVES with
+            // undefined instead of rejecting — so without this check the ask
+            // waits for an answer that can never arrive, and since this ipc runs
+            // with timeout -1 it waits forever. Callers then died at whatever
+            // outer deadline they had, typically the 60s page-load timeout
+            // (Error #230), which is what "macro hangs at open" was.
+            //
+            // Rejecting here is what the recovery paths already expect: see
+            // ensurePlayTabIPC in ext/popup/run_command.ts, which matches on
+            // this message and reloads the page to get a fresh content script.
+            if (received === undefined) {
+              throw new Error(`Could not establish connection to tab ${tabId}. Receiving end does not exist`)
+            }
+
+            return received
+          })
         }
       },
       onAnswer: function (fn) {

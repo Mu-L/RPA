@@ -51,7 +51,7 @@ export const MACRO_AGENT_TOOLS: Array<{ name: string; description: string; param
   {
     name: 'set_macro',
     description:
-      'Apply changes to the macro in the editor — pass the complete Ui.Vision JSON ({"Name": "...", "Commands": [{"Command": "...", "Target": "...", "Value": "..."}]}), or for a JS script macro {"Name": "name.js", "Script": "<ES5 JavaScript>"}. Use this to FIX or refine a macro. The user\'s original macro file is NEVER overwritten: the first change to a user macro is saved as a new copy (name_1) in the AI Generated folder, which then becomes the macro you keep editing. If the current macro uses visual commands (XClick/visual/OCR), replacing them all with DOM commands is rejected unless allow_visual_to_dom is true — ask the user first. Returns the macro name that was written, or a validation error.',
+      'Apply changes to the macro in the editor — pass the complete Ui.Vision JSON ({"Name": "...", "Commands": [{"Command": "...", "Target": "...", "Value": "..."}]}), or for a JS script macro {"Name": "name.js", "Script": "<modern JavaScript>"}. Use this to FIX or refine a macro. The user\'s original macro file is NEVER overwritten: the first change to a user macro is saved as a new copy (name_1) in the AI Generated folder, which then becomes the macro you keep editing. If the current macro uses visual commands (XClick/visual/OCR), replacing them all with DOM commands is rejected unless allow_visual_to_dom is true — ask the user first. Returns the macro name that was written, or a validation error.',
     parameters: {
       type: 'object',
       properties: {
@@ -70,7 +70,7 @@ export const MACRO_AGENT_TOOLS: Array<{ name: string; description: string; param
   {
     name: 'create_macro',
     description:
-      'Create a NEW macro from the given Ui.Vision JSON and save it in the "AI Generated" folder under a new, unique name (the Name field, with _1/_2 appended if taken). For a JS script macro pass {"Name": "...", "Script": "<ES5 JavaScript>"} — the .js name suffix is added automatically. The previously open macro is left untouched. The new macro opens in the editor — refine it afterwards with set_macro, do not call create_macro again for fixes. Returns the final macro name.',
+      'Create a NEW macro from the given Ui.Vision JSON and save it in the "AI Generated" folder under a new, unique name (the Name field, with _1/_2 appended if taken). For a JS script macro pass {"Name": "...", "Script": "<modern JavaScript>"} — the .js name suffix is added automatically. The previously open macro is left untouched. The new macro opens in the editor — refine it afterwards with set_macro, do not call create_macro again for fixes. Returns the final macro name.',
     parameters: {
       type: 'object',
       properties: {

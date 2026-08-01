@@ -36,6 +36,22 @@ export const getActiveWebTab = async (): Promise<any | null> => {
   return active.length ? active[0] : null
 }
 
+// The active tab, whatever it happens to show. Last resort for starting a run
+// when there is no web tab anywhere — a freshly started browser sitting on its
+// new tab page, where refusing to start meant the Play button did nothing at
+// all. `open` copes with a browser-internal page: the player loads the URL
+// into it (preparePlayTab in ext/popup/run_command.ts). Extension pages stay
+// excluded — navigating one away would take down the IDE / side panel.
+export const getActiveNonExtensionTab = async (): Promise<any | null> => {
+  const usable = (tab: any): boolean => !!tab && !/^(chrome|moz|edge)-extension:/i.test(tab.url || '')
+
+  const focused = (await Ext.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => [])).filter(usable)
+  if (focused.length) return focused[0]
+
+  const active = (await Ext.tabs.query({ active: true }).catch(() => [])).filter(usable)
+  return active.length ? active[0] : null
+}
+
 export const getTab = async (tabId: number): Promise<any> => {
   try { 
     return Ext.tabs.get(tabId)

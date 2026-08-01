@@ -62,8 +62,18 @@ const cache = {}
 // deprecation is about new authoring — table macros that already use them keep
 // working unchanged. `jsError` is set when the variable cannot work in a JS
 // script at all: reading it there fails with this message instead of handing
-// back a plausible-looking number that is silently meaningless.
+// back a plausible-looking value that is silently meaningless.
 export const DEPRECATED_VARIABLES = [
+  {
+    name: '!URL',
+    note: 'table macros only; in JS read the page itself with eval("return location.href")',
+    jsError:
+      "'!URL' is a table-macro variable and cannot be trusted in a JS script: it is only refreshed by commands that go through the classic player, " +
+      'so after uiv.page.click(match), uiv.desktop.* or an OCR call it still holds the PREVIOUS page — and even on the paths that do refresh it, ' +
+      'the URL is captured before the click\'s navigation finishes, leaving it one command behind. ' +
+      'Read the page instead: uiv.eval(\'return location.href\'). ' +
+      'On a page that cannot run scripts (chrome://, the PDF viewer, an error page) use uiv.tabs.list() — every entry carries its url.'
+  },
   {
     name: '!CURRENT_TAB_NUMBER_RELATIVE',
     note: 'deprecated — table macros only; in JS compute it from !CURRENT_TAB_NUMBER',

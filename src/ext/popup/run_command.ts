@@ -145,7 +145,16 @@ type CheckHeartBeatResponse = {
   secret: string
 }
 
-async function checkHeartBeat(tabIpcTimeout?: number, tabIpcExpiredAt?: number): Promise<CheckHeartBeatResponse> {
+async function checkHeartBeat(
+  tabIpcTimeout?: number,
+  tabIpcExpiredAt?: number,
+  // A deadline for callers that retry. A missing content script is reported in
+  // milliseconds now (ipcBg.ask in common/ipc/ipc_bg_cs.js), but a page whose
+  // main thread is blocked still answers nothing at all — and retry() only
+  // arms its own timeout after a first rejection, so one hung attempt would
+  // mean no retry ever happens.
+  ipcCallTimeout?: number
+): Promise<CheckHeartBeatResponse> {
   const disableHeartBeat = await getState('disableHeartBeat')
 
   if (disableHeartBeat) {
@@ -157,6 +166,7 @@ async function checkHeartBeat(tabIpcTimeout?: number, tabIpcExpiredAt?: number):
   return callPlayTab<CheckHeartBeatResponse>({
     tabIpcTimeout,
     tabIpcNoLaterThan: tabIpcExpiredAt,
+    ipcCallTimeout,
     command: 'HEART_BEAT',
     args: {}
   }).catch((e) => {
@@ -247,7 +257,9 @@ function withPageLoadCheck<T>(command: Command, timeoutPageLoad: number, promise
       }
     ),
     delay(() => {
-      throw new Error(`Error #230: Page load ${timeoutPageLoad / 1000} seconds time out`)
+      // the three #230 sites are indistinguishable in the log otherwise, and
+      // each means something different — say which wait ran out
+      throw new Error(`Error #230: Page load ${timeoutPageLoad / 1000} seconds time out (no page load event after '${command.cmd}')`)
     }, timeoutPageLoad)
   ])
 }
@@ -293,7 +305,10 @@ function waitForCommandToComplete(command: Command, res: RunCommandResponse): Pr
       // use this fact to tell whether a page is loaded or not
       return retry(
         () => {
-          return checkHeartBeat().then(async (heartBeatResult) => {
+          // bounded, so a dead content script fails this attempt (and the loop
+          // below can retry / report #210) instead of hanging until the 60s
+          // page-load race turns it into a misleading Error #230
+          return checkHeartBeat(undefined, undefined, CS_ALIVE_TIMEOUT).then(async (heartBeatResult) => {
             const lastSecret = await getState('lastCsIpcSecret')
             const heartBeatSecret = heartBeatResult.secret
 
@@ -657,7 +672,12 @@ async function openNewUrlInPlayTab(command: Command, startPageLoadCountDown: () 
   })()
 
   if (!isOpenCommand) {
-    throw new Error('Error #101: Ui.Vision is not connected to a browser tab')
+    // Reached whenever the play tab has no content script to run this command
+    // in — most often a page that was already open before Ui.Vision started
+    // (or before its last update), since only a page load injects one.
+    throw new Error(
+      'Error #101: Ui.Vision is not connected to a browser tab. If the page was already open before Ui.Vision started, reload it (F5), or begin the macro with an "open" command.'
+    )
   }
 
   startPageLoadCountDown()
@@ -672,6 +692,12 @@ async function openNewUrlInPlayTab(command: Command, startPageLoadCountDown: () 
   }
 }
 
+// Cap for heart beats that a retry loop depends on. The handler in the page is
+// a no-op, so a live content script answers in single-digit milliseconds; the
+// cap only matters when the page cannot answer at all, and it costs nothing
+// when it does (the timer is cleared on the answer).
+const CS_ALIVE_TIMEOUT = 3000
+
 function preparePlayTabIPC(
   command: Command,
   tab: chrome.tabs.Tab,
@@ -685,6 +711,13 @@ function preparePlayTabIPC(
     })
     .then(
       () => {
+        // A cache hit only proves that a content script once registered for
+        // this tab id — the entry outlives the script in the page. That is no
+        // longer a problem to probe for here: the heart beat below now fails
+        // in milliseconds when the receiving end is gone (see ipcBg.ask in
+        // common/ipc/ipc_bg_cs.js), and ensurePlayTabIPC reloads the page on
+        // exactly that error. Probing first would cost a round trip per open
+        // and would misjudge a page whose main thread is briefly blocked.
         return { tab, hasOpenedUrl: false } as PreparePlayTabIntermediateResult
       },
       () => {
@@ -722,6 +755,23 @@ function ensurePlayTabIPC(
         return Promise.reject(e)
       }
 
+      // The play tab has no content script answering. For 'open' the recovery
+      // is to load the URL there, which is the command itself. Anything else
+      // has nothing to run in and ends at #101 — but retry once first: a
+      // content script that has just reconnected attaches its listener a beat
+      // after the background marks its ipc available (RECONNECT in
+      // common/ipc/ipc_bg_cs.js enables the cache entry before answering), and
+      // that gap must not cost the user a failed macro. Failure path only.
+      if (!isOpenLikeCommand(command)) {
+        await delay(() => {}, 300)
+
+        try {
+          return await preparePlayTabIPC(command, tab, startCountDown, stopCountDown)
+        } catch (e2) {
+          return await openNewUrlInPlayTab(command, startCountDown)
+        }
+      }
+
       const newTabResult = await openNewUrlInPlayTab(command, startCountDown)
       return await preparePlayTabIPC(command, newTabResult.tab, startCountDown, stopCountDown)
     }
@@ -731,7 +781,7 @@ function ensurePlayTabIPC(
     }
 
     if (e.message === 'timeout') {
-      throw new Error(`Error #230: Page load ${timeout / 1000} seconds time out`)
+      throw new Error(`Error #230: Page load ${timeout / 1000} seconds time out (the play tab never answered)`)
     }
 
     throw e
@@ -750,6 +800,27 @@ function createCountDown(timeout: number): [() => void, () => void] {
 
 function isChromeSpecialPage(url: string): boolean {
   return url.startsWith('chrome://') || url.startsWith('chrome-error://') || url.startsWith('edge://')
+}
+
+// 'open' / 'openBrowser' are the only commands whose whole job is to bring up
+// a page, so they are also the only ones that may legitimately start on a tab
+// that cannot run a content script.
+function isOpenLikeCommand(command: Command): boolean {
+  return command.cmd === 'open' || command.cmd === 'openBrowser'
+}
+
+function isExtensionPage(url?: string): boolean {
+  return !!url && /^(chrome|moz|edge)-extension:/i.test(url)
+}
+
+// Can a content script possibly live in this tab? Only pages the extension may
+// inject into qualify. Everything else — no play tab yet, browser-internal
+// pages (Firefox starts on about:newtab, chrome://…, edge://…), extension
+// pages — can never answer an IPC probe, so waiting for one there only burns
+// the page-load timeout. Note this replaces two URL blacklists that both
+// missed about:newtab, the page a freshly started Firefox sits on.
+function canHostContentScript(url?: string): boolean {
+  return !!url && /^(https?|file|ftp):/i.test(url)
 }
 
 function waitForPageLoadComplete(tab: chrome.tabs.Tab): Promise<boolean> {
@@ -834,9 +905,30 @@ function preparePlayTab(command: Command): Promise<boolean> {
         const ipcTimeout = getIpcTimeout(command)
         const timeoutPromise = new Promise((resolve, reject) => {
           setTimeout(() => {
-            reject(new Error(`Error #230: Page load ${ipcTimeout / 1000} seconds time out`))
+            reject(new Error(`Error #230: Page load ${ipcTimeout / 1000} seconds time out (the tab never finished loading)`))
           }, ipcTimeout)
         })
+
+        // `open` on a tab that can never host a content script: no play tab yet
+        // ({ id: -1 } below), a browser-internal page, an extension page. This
+        // is the "macro hangs at open" case — probing such a tab for a content
+        // script fails, and every wait on the recovery path that follows is one
+        // page-load timeout long, so the run died 60s later with Error #230.
+        // Loading the URL into a real tab and waiting for it IS the open
+        // command, so go straight there.
+        if (isOpenLikeCommand(command) && !canHostContentScript(tab.url)) {
+          // an extension page (the IDE window, or the side panel opened as a
+          // tab) must not be navigated away — drop it and open a fresh tab
+          const pTarget: Promise<void> = isExtensionPage(tab.url)
+            ? updateState((state) => ({ ...state, tabIds: { ...state.tabIds, toPlay: null } }))
+            : Promise.resolve()
+
+          const openNewURLPromise = pTarget
+            .then(() => openNewUrlInPlayTab(command, startPageLoadCountDown))
+            .then((res: PreparePlayTabIntermediateResult) => waitForPageLoadComplete(res.tab))
+
+          return Promise.race([openNewURLPromise, timeoutPromise.then(() => false)])
+        }
 
         // On Firefox, it does get ipc from "about:blank", but somehow the connection is not good
         // it's always reconnecting. so instead of trying to run command on "about:blank",
@@ -844,7 +936,9 @@ function preparePlayTab(command: Command): Promise<boolean> {
         const nonresponsiveFirefoxURLs = ['about:home', 'about:blank', 'about:config', 'about:debugging']
 
         // if tab.url starts with any of the nonresponsiveFirefoxURLs
-        if (Ext.isFirefox() && nonresponsiveFirefoxURLs.some((url) => tab.url!.startsWith(url))) {
+        // (tab.url is undefined for the { id: -1 } fallback — guard, or this
+        // throws before the !tab.url branch below can handle that case)
+        if (Ext.isFirefox() && tab.url && nonresponsiveFirefoxURLs.some((url) => tab.url!.startsWith(url))) {
           // must wait on the tab returned by openNewUrlInPlayTab — on a fresh first
           // run `tab` is the { id: -1 } fallback and polling it throws E231
           const openNewURLPromise = openNewUrlInPlayTab(command, startPageLoadCountDown).then((res) => waitForPageLoadComplete(res.tab))

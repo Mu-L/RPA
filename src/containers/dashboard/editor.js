@@ -1541,9 +1541,16 @@ class DashboardEditor extends React.Component {
       ? 'This is a JS script macro — the Table and Source views edit command-table macros.'
       : 'This is a command-table macro — the JS view edits JS script macros.'
 
-    const disabledTabLabel = (label, disabled) => (
-      disabled ? <Tooltip title={otherKindNote}><span>{label}</span></Tooltip> : label
-    )
+    // sparkle while the AI chat agent drives a run — the same marker the side
+    // panel puts on its Macro tab, so the IDE user also sees WHO started the
+    // run that plays "by itself". It goes on the tab that holds the running
+    // macro: JS View for a script macro, Table View for a command table.
+    const aiRunning = !!(ui && ui.aiRunningMacro)
+    const tabLabel = (label, disabled, isAiTab) => {
+      if (disabled)             return <Tooltip title={otherKindNote}><span>{label}</span></Tooltip>
+      if (aiRunning && isAiTab) return <Tooltip title="The AI is running this macro"><span>{label} ✨</span></Tooltip>
+      return label
+    }
 
     return (
       <div className="editor-wrapper">
@@ -1556,7 +1563,7 @@ class DashboardEditor extends React.Component {
             // defaultActiveKey="1"
             items={[
               {
-                label: disabledTabLabel('Table View', isScriptMacro),
+                label: tabLabel('Table View', isScriptMacro, !isScriptMacro),
                 disabled: isScriptMacro,
                 key: 'table_view',
                 children: (
@@ -1724,7 +1731,7 @@ class DashboardEditor extends React.Component {
                 )
               },
               {
-                label: disabledTabLabel('Source View (JSON)', isScriptMacro),
+                label: tabLabel('Source View (JSON)', isScriptMacro),
                 disabled: isScriptMacro,
                 key: 'source_view',
                 className: "source-view",
@@ -1765,7 +1772,7 @@ class DashboardEditor extends React.Component {
               },
 
               {
-                label: disabledTabLabel('JS View', !isScriptMacro),
+                label: tabLabel('JS View', !isScriptMacro, isScriptMacro),
                 disabled: !isScriptMacro,
                 key: 'script_view',
                 // Mount the editor ONLY for an actual script macro. As a

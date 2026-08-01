@@ -19,7 +19,7 @@ import { getPlayTab, openSettings, showPanelWindow } from '@/ext/common/tab'
 import { getPlayer, Player } from '@/common/player'
 import { Actions as simpleActions } from '@/actions/simple_actions'
 import { range, setIn, updateIn, compose, cn } from '@/common/utils'
-import { getActiveWebTab } from '@/common/tab_utils'
+import { getActiveNonExtensionTab, getActiveWebTab } from '@/common/tab_utils'
 import { goUivUrl } from '@/common/uiv_link'
 import { isScriptPaused, isScriptRunning, onScriptEvent, pauseScript, resumeScript, runScript, stopScript } from '@/modules/script_runner'
 import './controlbar.scss'
@@ -136,6 +136,12 @@ class Controls extends React.Component {
     let tab = wTab != '' ? wTab : await getActiveWebTab()
     if (!tab) {
       tab = await getPlayTab().catch(() => null)
+    }
+    // Nothing but the new tab page open (freshly started browser): starting
+    // was refused here, so Play did nothing and said nothing. Hand the player
+    // the active tab as-is instead — `open` navigates it.
+    if (!tab) {
+      tab = await getActiveNonExtensionTab()
     }
     if (!tab) return
 

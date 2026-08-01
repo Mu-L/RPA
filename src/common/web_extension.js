@@ -96,6 +96,11 @@
       extension: ['isAllowedFileSchemeAccess'],
       contextMenus: ['create', 'update', 'remove', 'removeAll'],
       'storage.local': ['get', 'set'],
+      // in-memory, cleared on extension reload/update and browser restart, kept
+      // across service-worker restarts — used to stamp ipc cache entries with
+      // the extension session they belong to (common/ipc/ipc_cache.ts).
+      // Absent on browsers too old to have it; callers must cope with that.
+      'storage.session': ['get', 'set'],
       scripting: ['executeScript'],
       permissions: ['request', 'contains'],
     },
