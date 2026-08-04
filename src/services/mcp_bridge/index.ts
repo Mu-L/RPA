@@ -23,6 +23,18 @@ import { MacroAgentTools } from '@/services/ai/macro_agent/tools'
 // (config.mcpBridgeEnabled / mcpBridgePort / mcpBridgeToken); the panel must
 // be open for the connection to exist — by design, so the user can watch.
 
+// The two things a stuck user has almost always missed: they never ran the
+// installer, or they ran it and did not FULLY restart the MCP client (servers
+// are loaded only at startup, so an already-open client never spawns the
+// bridge and the port stays dead). Say both wherever the bridge is unreachable
+// — "is the bridge process running?" alone leaves them with nothing to try.
+const NOT_REACHABLE_HINT =
+  'Run "npx uivision-mcp-bridge --setup" in a terminal, then fully restart Claude Code (a new session/tab is not enough) — MCP servers load only at startup.'
+
+// Where to get the token, said the same way everywhere.
+const TOKEN_HINT =
+  'The setup command prints it; it is also in the .uivision_mcp_token file in your home folder, and the AI can read it off the bridge and show it to you.'
+
 const RECONNECT_MIN_MS = 3000
 // capped low: after the bridge process restarts (new Claude Code session),
 // the panel should be back within seconds — a 60s cap read as "it hangs"
@@ -152,11 +164,11 @@ class McpBridgeClient {
         // the Test button is waiting on this attempt — turn the close code
         // into a verdict (the reconnect loop below still runs as usual)
         if (event && event.code === 4003) {
-          this.testWaiter({ ok: false, text: `The bridge on port ${port} rejected the token — paste the current value from the .uivision_mcp_token file in your home folder.` })
+          this.testWaiter({ ok: false, text: `The bridge on port ${port} rejected the token. ${TOKEN_HINT}` })
         } else if (event && event.code === 4002) {
           this.testWaiter({ ok: false, text: 'Reached the bridge, but another browser immediately took the connection — disable the MCP bridge in that browser.' })
         } else {
-          this.testWaiter({ ok: false, text: `Could not reach the bridge on 127.0.0.1:${port} — is the bridge process running? (It starts with a Claude Code session that has Ui.Vision registered.)` })
+          this.testWaiter({ ok: false, text: `Could not reach the bridge on 127.0.0.1:${port}. ${NOT_REACHABLE_HINT}` })
         }
       }
       if (event && event.code === 4002) {
@@ -182,7 +194,7 @@ class McpBridgeClient {
         // the server rejects a bad token BEFORE hello_ok, so without this the
         // failure is completely silent and the client just retries forever
         this.tokenErrorShown = true
-        this.log('The MCP bridge rejected the connection: wrong or missing token. Check the token in Settings > AI against the bridge\'s .uivision_mcp_token file.', 'error')
+        this.log(`The MCP bridge rejected the connection: wrong or missing token. ${TOKEN_HINT}`, 'error')
         message.error('MCP bridge: wrong token — see Settings > AI', 5)
       }
       this.scheduleReconnect()
@@ -202,7 +214,7 @@ class McpBridgeClient {
       return Promise.resolve({ ok: false, text: 'The MCP bridge is switched off — enable it first.' })
     }
     if (!token) {
-      return Promise.resolve({ ok: false, text: 'Enter the bridge token first — it is in the .uivision_mcp_token file in your home folder.' })
+      return Promise.resolve({ ok: false, text: `Enter the bridge token first. ${TOKEN_HINT}` })
     }
     if (this.wasConnected && this.ws && this.ws.readyState === WebSocket.OPEN) {
       return Promise.resolve({ ok: true, text: `Connected to the MCP bridge on port ${port}.` })
@@ -217,7 +229,7 @@ class McpBridgeClient {
       }
       this.testWaiter = finish
       // nothing at all answered — neither hello_ok nor a close event
-      setTimeout(() => finish({ ok: false, text: `No answer from 127.0.0.1:${port} within 5 seconds — is the bridge process running?` }), 5000)
+      setTimeout(() => finish({ ok: false, text: `No answer from 127.0.0.1:${port} within 5 seconds. ${NOT_REACHABLE_HINT}` }), 5000)
       this.teardown()
       this.connect()
     })
@@ -528,7 +540,7 @@ export function testMcpBridge (): Promise<{ ok: boolean; text: string }> {
     return Promise.resolve({ ok: false, text: 'The MCP bridge is switched off — enable it first.' })
   }
   if (!token) {
-    return Promise.resolve({ ok: false, text: 'Enter the bridge token first — it is in the .uivision_mcp_token file in your home folder.' })
+    return Promise.resolve({ ok: false, text: `Enter the bridge token first. ${TOKEN_HINT}` })
   }
 
   return new Promise((resolve) => {
@@ -545,7 +557,7 @@ export function testMcpBridge (): Promise<{ ok: boolean; text: string }> {
     } catch (e) {
       return finish({ ok: false, text: `Could not open a socket to 127.0.0.1:${port}.` })
     }
-    setTimeout(() => finish({ ok: false, text: `No answer from 127.0.0.1:${port} within 5 seconds — is the bridge process running?` }), 5000)
+    setTimeout(() => finish({ ok: false, text: `No answer from 127.0.0.1:${port} within 5 seconds. ${NOT_REACHABLE_HINT}` }), 5000)
 
     ws.onopen = () => {
       ws.send(JSON.stringify({ type: 'hello', token, probe: true, client: 'uivision-settings-test' }))
@@ -561,9 +573,9 @@ export function testMcpBridge (): Promise<{ ok: boolean; text: string }> {
     }
     ws.onclose = (event) => {
       if (event && event.code === 4003) {
-        finish({ ok: false, text: `The bridge on port ${port} rejected the token — paste the current value from the .uivision_mcp_token file in your home folder.` })
+        finish({ ok: false, text: `The bridge on port ${port} rejected the token. ${TOKEN_HINT}` })
       } else {
-        finish({ ok: false, text: `Could not reach the bridge on 127.0.0.1:${port} — is the bridge process running? (It starts with a Claude Code session that has Ui.Vision registered.)` })
+        finish({ ok: false, text: `Could not reach the bridge on 127.0.0.1:${port}. ${NOT_REACHABLE_HINT}` })
       }
     }
     ws.onerror = () => { /* onclose follows and reports */ }

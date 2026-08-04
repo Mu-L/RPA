@@ -12,6 +12,7 @@ import clipboard from '../common/clipboard'
 import storage from '../common/storage'
 import { setFileInputFiles } from '../common/debugger'
 import { getDownloadMan } from '../common/download_man'
+import { goUivUrl } from '../common/uiv_link'
 import config from '../config'
 import { StorageManager, StorageStrategyType } from '../services/storage'
 import { getXFile } from '../services/xmodules/xfile'
@@ -31,7 +32,7 @@ import { SIDEPANEL_TAB_ID } from '../common/ipc/ipc_bg_cs'
 import { checkIfSidePanelOpen } from '@/ext/common/sidepanel'
 import interceptLog from '@/common/intercept_log'
 import { getWindowSize } from '../common/resize_window'
-import { markAutomationTab, unmarkAutomationTabs, bindAutomationTabMarkEvents, markIdleTab, unmarkIdleTab } from './automation_tab_mark'
+import { markAutomationTab, unmarkAutomationTabs, bindAutomationTabMarkEvents } from './automation_tab_mark'
 
 const downloadMan = new DownloadMan();
 
@@ -152,6 +153,48 @@ const togglePlayingBadge = (isPlaying, options) => {
 const isUpgradeViewed = () => {
   return Ext.storage.local.get('upgrade_not_viewed')
   .then(obj => obj['upgrade_not_viewed'] !== 'not_viewed')
+}
+
+// Shows the "what's new" page once after an update, and resolves to true if it
+// did. onInstalled only ARMS this (badge + upgrade_not_viewed); the page itself
+// waits for the next toolbar click, so an update that lands while the browser
+// is busy doesn't interrupt anything.
+//
+// Always a NEW tab — never a navigation of whatever the user is looking at.
+//
+// Callable right after chrome.sidePanel.open(): it awaits before touching the
+// tabs API, but tabs.create() needs no user gesture, so nothing is lost. Do NOT
+// await it before opening the panel — that would void the gesture.
+const showUpgradePageIfNeeded = () => {
+  return isUpgradeViewed()
+  .then(isViewed => {
+    if (isViewed) return false
+
+    Ext.action.setBadgeText({ text: '' })
+
+    return Ext.storage.local.set({ upgrade_not_viewed: '' })
+    .then(() => Ext.tabs.create({
+      // gui=bg + the version: the click decorator cannot reach a tab the
+      // background opens, and this is the page that most wants to know which
+      // version the user just landed on
+      url: goUivUrl(config.urlAfterUpgrade, 'bg'),
+      active: true
+    }))
+    .then(() => true)
+  })
+  .catch(e => {
+    log.warn(`could not show the upgrade page: ${e && e.message}`)
+    return false
+  })
+}
+
+const showPanelWindowAndLog = () => {
+  return showPanelWindow().then(isWindowCreated => {
+    if (isWindowCreated) {
+      getLogServiceForBg().updateLogFileName()
+      getLogServiceForBg().logWithTime('Ui.Vision started')
+    }
+  })
 }
 
 const notifyRecordCommand = (command) => {
@@ -330,10 +373,6 @@ const closeSidePanel = () => {
 // user's click (e.g. a bookmark run) — chrome.sidePanel.open() rejects once
 // the user gesture is gone, which happens after any `await`.
 // Resolves to true if the side panel is opening.
-// Green "idle" tab mark: while the side panel is open and nothing is being
-// recorded/replayed, mark the currently active tab so the user can see which
-// tab Ui.Vision is pointing at. Recording/replay marks take over automatically
-// (markAutomationTab with a different mode clears the idle mark first).
 // true while the sidebar AI macro agent is working (PANEL_AI_TAB_MARK):
 // replays it starts get the orange 'ai' tab mark instead of blue, and stopping
 // such a replay keeps the mark — the agent's turn is not over yet.
@@ -351,26 +390,11 @@ let aiTabMarkActive = false
 // tab is already marked), and the runner clears it once when the script ends.
 let scriptRunActive = false
 
-const idleMarkGuard = (tab) => {
+// A tab that can carry a mark at all: real, and not one of our own extension
+// pages (marking the side panel or the IDE window frames Ui.Vision itself).
+const isMarkableTab = (tab) => {
   return !!tab && !!tab.id && !!tab.url &&
     tab.url.indexOf(Ext.runtime.getURL('')) === -1
-}
-
-const restoreIdleTabMark = () => {
-  return checkIfSidePanelOpen()
-  .then(isOpen => {
-    // panel closed: sweep any stale green mark. This is what removes marks
-    // left behind when the service worker was dead at the moment the panel
-    // closed (port.onDisconnect never fired then).
-    if (!isOpen) return unmarkIdleTab()
-    return getCurrentTab()
-    .then(tab => {
-      if (idleMarkGuard(tab)) {
-        return markIdleTab(tab.id)
-      }
-    })
-  })
-  .catch(() => {})
 }
 
 const tryOpenSidePanelForRun = (tabId) => {
@@ -402,27 +426,13 @@ const bindEvents = () => {
       if (showSidePanel) {
         // debugger;
         Ext.sidebarAction.open()
+        // the sidebar is the entry point now, so this click is the first
+        // interaction after an update just as much as an IDE-window click was
+        showUpgradePageIfNeeded()
       } else {
-        isUpgradeViewed()
-        .then(isViewed => {
-          if (isViewed) {
-            return showPanelWindow().then(isWindowCreated => {
-              if (isWindowCreated) {
-                getLogServiceForBg().updateLogFileName()
-                getLogServiceForBg().logWithTime('Ui.Vision started')
-              }
-            })
-          } else {
-            Ext.action.setBadgeText({ text: '' })
-            Ext.storage.local.set({
-              upgrade_not_viewed: ''
-            })
-            return Ext.tabs.create({
-              url: config.urlAfterUpgrade
-            })
-          }
-        })
-      }      
+        showUpgradePageIfNeeded()
+        .then(didShow => didShow ? undefined : showPanelWindowAndLog())
+      }
     } else {
       // if browser is chrome or edge
       if (showSidePanel) {
@@ -431,13 +441,17 @@ const bindEvents = () => {
             enabled: true
           })
           // keeping it in then block will cause error
-          Ext.sidePanel.open({ 
-            tabId: tab.id 
+          Ext.sidePanel.open({
+            tabId: tab.id
           }).then((e) => {
             isSidePanelOpen = true
           }).catch(() => {
             isSidePanelOpen = false
           })
+          // after open(), never before: this awaits storage, and any await
+          // ahead of open() voids the user gesture. Only on the opening click —
+          // a click that closes the panel should not pop a tab.
+          showUpgradePageIfNeeded()
         } else {
           closeSidePanel(tab.id).then(() => {
             isSidePanelOpen = false
@@ -447,26 +461,9 @@ const bindEvents = () => {
         closeSidePanel(tab.id).then(() => {
           isSidePanelOpen = false
         })
-  
-        isUpgradeViewed()
-        .then(isViewed => {
-          if (isViewed) {
-            return showPanelWindow().then(isWindowCreated => {
-              if (isWindowCreated) {
-                getLogServiceForBg().updateLogFileName()
-                getLogServiceForBg().logWithTime('Ui.Vision started')
-              }
-            })
-          } else {
-            Ext.action.setBadgeText({ text: '' })
-            Ext.storage.local.set({
-              upgrade_not_viewed: ''
-            })
-            return Ext.tabs.create({
-              url: config.urlAfterUpgrade
-            })
-          }
-        })
+
+        showUpgradePageIfNeeded()
+        .then(didShow => didShow ? undefined : showPanelWindowAndLog())
       }
     }
   })
@@ -607,11 +604,6 @@ const bindEvents = () => {
   // first icon click correctly (onStartup does not fire on install)
   manageKeepSWAlive()
 
-  // every service worker start: re-mark the active tab if the side panel is
-  // open, or sweep stale green "Ui.Vision" groups if it is not (they survive
-  // in the tab strip when the worker was dead while the panel closed)
-  restoreIdleTabMark()
-
   // Note: set the activated tab as the one to play
   Ext.tabs.onActivated.addListener(async (activeInfo) => {
     manageKeepSWAlive()
@@ -621,16 +613,9 @@ const bindEvents = () => {
       Ext.tabs.get(activeInfo.tabId)
     ])
 
+    // keep the toolbar-icon toggle and panel routing in sync with reality
     checkIfSidePanelOpen().then((isOpen) => {
       isSidePanelOpen = isOpen
-
-      // idle mark follows the active tab (only while idle + side panel open)
-      if (isOpen &&
-          state.status === C.APP_STATUS.NORMAL &&
-          activeInfo.tabId !== state.tabIds.panel &&
-          idleMarkGuard(tab)) {
-        markIdleTab(activeInfo.tabId)
-      }
     })
 
     if (activeInfo.tabId === state.tabIds.panel ||
@@ -777,20 +762,9 @@ const bindEvents = () => {
       console.log('side panel connected')
       isSidePanelOpen = true
 
-      // side panel just opened — mark the active tab (green) if we're idle
-      getState().then(state => {
-        if (state.status !== C.APP_STATUS.NORMAL) return
-        return getCurrentTab().then(tab => {
-          if (idleMarkGuard(tab)) {
-            markIdleTab(tab.id)
-          }
-        })
-      }).catch(() => {})
-
       port.onDisconnect.addListener(async () => {
         console.log('side panel disconnected')
         isSidePanelOpen = false
-        unmarkIdleTab()
 
         // Note: sidebar-first design — side panel and editor window can be open
         // at the same time. If the side panel closes while it holds panel
@@ -1152,7 +1126,7 @@ const onRequestAsync = async (cmd, args) => {
       }))
 
       toggleRecordingBadge(false)
-      unmarkAutomationTabs().then(restoreIdleTabMark)
+      unmarkAutomationTabs()
       return true
 
     case 'PANEL_TRY_TO_RECORD_OPEN_COMMAND': {
@@ -1284,7 +1258,7 @@ const onRequestAsync = async (cmd, args) => {
       // agent turn (cleared by PANEL_AI_TAB_MARK) or a JS script, whose every
       // uiv.* call is its own run (cleared by PANEL_SCRIPT_RUN_MARK)
       if (!aiTabMarkActive && !scriptRunActive) {
-        unmarkAutomationTabs().then(restoreIdleTabMark)
+        unmarkAutomationTabs()
       }
 
       // Note: reset download manager to clear any previous downloads — same
@@ -1439,11 +1413,11 @@ const onRequestAsync = async (cmd, args) => {
       aiTabMarkActive = !!args.marked
 
       if (!args.marked) {
-        return unmarkAutomationTabs().then(restoreIdleTabMark).then(() => true)
+        return unmarkAutomationTabs().then(() => true)
       }
 
       return getCurrentTab().then(tab => {
-        if (!idleMarkGuard(tab)) return false
+        if (!isMarkableTab(tab)) return false
         return markAutomationTab(tab.id, 'ai').then(() => true)
       })
     }
@@ -1461,7 +1435,7 @@ const onRequestAsync = async (cmd, args) => {
       getDownloadMan().reset()
 
       if (!args.marked && !aiTabMarkActive) {
-        return unmarkAutomationTabs().then(restoreIdleTabMark).then(() => true)
+        return unmarkAutomationTabs().then(() => true)
       }
 
       return true
@@ -2406,60 +2380,149 @@ const initIPC = async () => {
   }, getLogServiceForBg)
 }
 
+// Records "this profile just moved to a new version": badge + the flag that
+// makes the next toolbar click open the what's new page (showUpgradePageIfNeeded).
+// Deliberately does NOT open anything itself — an update lands while the user is
+// mid-browse, or during a browser start, and neither is a moment to steal a tab.
+//
+// Idempotent, because two independent detectors call it (onInstalled and the
+// version compare below) and on Chrome both fire for the same update.
+const markUpgraded = () => {
+  Ext.action.setBadgeText({ text: 'NEW' })
+  Ext.action.setBadgeBackgroundColor({ color: '#4444FF' })
+
+  // Say "not a fresh install" OUT LOUD. The install branch only ever writes
+  // true, so without this the upgrade case is an ABSENT key, and isFreshInstall
+  // has to infer it from showClassicMacros — a config value nothing else needs
+  // any more. One explicit false here makes the flag authoritative in both
+  // directions and leaves that inference as a genuine last resort.
+  storage.get('config')
+  .then(config => storage.set('config', {
+    ...config,
+    macroFreshInstall: false
+  }))
+
+  return Ext.storage.local.set({
+    upgrade_not_viewed: 'not_viewed'
+  })
+}
+
+// Gives a brand new profile its new-user defaults and opens the welcome page.
+// Unlike an update, an install IS the user's own action, so opening the tab
+// right away interrupts nothing.
+//
+// Note the write ordering: index.js restoreConfig() merges `...config` LAST, so
+// everything set here survives the panel's first run — including the two flags
+// it would otherwise have guessed wrong, since by then a config exists and its
+// isExistingInstall check would call this profile an upgrade.
+const markFreshInstall = () => {
+  storage.get('config')
+  .then(config => {
+    return storage.set('config', {
+      ...config,
+      showTestCaseTab: false,
+      // side panel lands on the AI Chat tab on its first open (the
+      // flag is cleared there after use)
+      openAiChatTabOnce: true,
+      // The browser's own answer to "is this a new user?". restoreConfig
+      // can only ask whether a config exists, which is true for any
+      // reload of an unpacked extension — so it cannot tell a genuine
+      // first install from an update, and the setup dialog was
+      // recommending the upgrade path to brand new users.
+      macroFreshInstall: true,
+      showClassicMacros: false
+    })
+  })
+
+  return Ext.tabs.create({
+    url: goUivUrl(config.urlAfterInstall, 'bg'),
+    active: true
+  })
+}
+
 const initOnInstalled = () => {
   if (typeof process !== 'undefined' && process.env.NODE_ENV === 'production') {
-    Ext.runtime.setUninstallURL(config.urlAfterUninstall)
+    // re-set on every background start, so the version it carries is the one
+    // the user actually uninstalls from rather than the one they installed
+    Ext.runtime.setUninstallURL(goUivUrl(config.urlAfterUninstall, 'bg'))
 
     chrome.runtime.onInstalled.addListener(({ reason, previousVersion }) => {
       // * Why doesn't it fire in firefox?
       switch (reason) {
         case 'install': {
-          storage.get('config')
-          .then(config => {
-            return storage.set('config', {
-              ...config,
-              showTestCaseTab: false,
-              // side panel lands on the AI Chat tab on its first open (the
-              // flag is cleared there after use)
-              openAiChatTabOnce: true,
-              // Chrome's own answer to "is this a new user?". restoreConfig
-              // can only ask whether a config exists, which is true for any
-              // reload of an unpacked extension — so it cannot tell a genuine
-              // first install from an update, and the setup dialog was
-              // recommending the upgrade path to brand new users.
-              macroFreshInstall: true,
-              showClassicMacros: false
-            })
-          })
-          
-          return Ext.tabs.create({
-              url: config.urlAfterInstall
-            })
+          return markFreshInstall()
         }
 
         case 'update': {
-          Ext.action.setBadgeText({ text: 'NEW' })
-          Ext.action.setBadgeBackgroundColor({ color: '#4444FF' })
-          // Say "not a fresh install" OUT LOUD. The install branch above only
-          // ever writes true, so without this the upgrade case is an ABSENT
-          // key, and isFreshInstall has to infer it from showClassicMacros —
-          // a config value nothing else needs any more. One explicit false
-          // here makes the flag authoritative in both directions and leaves
-          // that inference as a genuine last resort (dev builds and Firefox,
-          // where onInstalled does not fire).
-          storage.get('config')
-          .then(config => storage.set('config', {
-            ...config,
-            macroFreshInstall: false
-          }))
-
-          return Ext.storage.local.set({
-            upgrade_not_viewed: 'not_viewed'
-          })
+          return markUpgraded()
         }
       }
     })
   }
+}
+
+const LAST_SEEN_VERSION_KEY = 'last_seen_version'
+
+// The other half of update detection, for the browsers onInstalled forgets.
+// Firefox never fires runtime.onInstalled, so on Firefox the upgrade flag was
+// never armed at all and the what's new page could not open however the icon
+// click behaved. Comparing the manifest version against the last one we stored
+// catches the same event from the other side, on every background start.
+//
+// Cheap enough to run on every MV3 service-worker wake: one storage read, and
+// once the versions match it does nothing.
+const initUpgradeDetectionByVersion = () => {
+  if (typeof process === 'undefined' || process.env.NODE_ENV !== 'production') {
+    return Promise.resolve()
+  }
+
+  const version = Ext.runtime.getManifest().version
+
+  return Ext.storage.local.get(LAST_SEEN_VERSION_KEY)
+  .then(obj => {
+    const lastSeen = obj[LAST_SEEN_VERSION_KEY]
+
+    // Nothing stored yet: either a brand new profile, or an existing user on
+    // the first build that records the version. Telling those apart is what
+    // decides between the welcome page and staying quiet — and it is only
+    // possible here, before anything has had a chance to write a config.
+    if (!lastSeen) {
+      return Ext.storage.local.set({ [LAST_SEEN_VERSION_KEY]: version })
+      .then(() => storage.get('config'))
+      .then(existingConfig => {
+        // A config WITHOUT the born-fresh marker means this profile ran a
+        // pre-marker build before, so it is an upgrade — arm the badge and
+        // the "what's new" page (opens on the next toolbar click) like any
+        // other update; markUpgraded is idempotent, so Chrome reaching here
+        // after onInstalled('update') already fired is harmless.
+        // A config WITH configBornFresh is NOT an existing profile: on
+        // Firefox the sidebar auto-opens at install (open_at_install) and
+        // its restoreConfig() write races this very read — before the marker
+        // existed, losing that race misread every fresh Firefox profile as
+        // an upgrade and silently skipped the welcome page.
+        if (existingConfig && Object.keys(existingConfig).length > 0 && !existingConfig.configBornFresh) {
+          return markUpgraded()
+        }
+
+        // Chrome/Edge already did this from onInstalled('install') — reaching
+        // here too would open the welcome page twice.
+        if (!Ext.isFirefox()) return
+
+        log('fresh install detected by version seed (firefox)')
+        return markFreshInstall()
+      })
+    }
+
+    if (lastSeen === version) return
+
+    log(`version changed: ${lastSeen} -> ${version}`)
+
+    return Ext.storage.local.set({ [LAST_SEEN_VERSION_KEY]: version })
+    .then(() => markUpgraded())
+  })
+  .catch(e => {
+    log.warn(`could not check for a version change: ${e && e.message}`)
+  })
 }
 
 // With service worker, this method could be called multiple times as background,
@@ -2537,6 +2600,7 @@ const initProxyMan = () => {
 bindEvents()
 initIPC()
 initOnInstalled()
+initUpgradeDetectionByVersion()
 initPlayTab()
 initDownloadMan()
 initProxyMan()

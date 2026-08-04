@@ -17,7 +17,11 @@ export default {
     // 9.9.12: demo csv/vision resources install into the CURRENT storage
     // mode — file-mode installs that took 9.9.11 got the macros but not the
     // images they search for, so the offer must fire once more.
-    version: '9.9.12',
+    // 9.9.13: the JS demo set installs on FRESH installs again (folder starts
+    // collapsed); the "JS" level is gone — its sub-folders sit directly below
+    // "Demo and QA Test Scripts" — and the classic set moved to its own
+    // top-level "Demo and QA Test Scripts (Classic)" folder (button-only).
+    version: '9.9.13',
     macroFolder: '/'
   },
   nativeMessaging: {

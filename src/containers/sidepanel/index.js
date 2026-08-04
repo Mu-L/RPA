@@ -246,6 +246,12 @@ class Sidepanel extends React.Component {
       return 'running'
     }
 
+    // JS script in progress: app status stays NORMAL on the fast path, but
+    // for the user a run is a run — never show the previous run's tone
+    if ((this.props.ui && this.props.ui.scriptRunning) || isScriptRunning()) {
+      return 'running'
+    }
+
     const src = this.props.editing.meta.src
     const extra = src && src.id && this.props.macrosExtra ? this.props.macrosExtra[src.id] : null
 
@@ -309,7 +315,11 @@ class Sidepanel extends React.Component {
     if (this.getActiveTab() === 'AiChat') return null
 
     const tone = this.getStatusTone()
-    const isPlaying = this.props.status === C.APP_STATUS.PLAYER
+    // a JS script counts as playing even while app status is NORMAL (its
+    // fast-path commands never enter the player) — without this, Log and
+    // Fix with AI showed mid-run and the bar carried a stale error tone
+    const isPlaying = this.props.status === C.APP_STATUS.PLAYER ||
+      (this.props.ui && this.props.ui.scriptRunning) || isScriptRunning()
     const logs = this.props.logs_ || []
     const lastLog = isPlaying && logs.length ? logs[logs.length - 1] : null
     const lastLogText = lastLog && typeof lastLog.text === 'string' ? lastLog.text : null
@@ -552,7 +562,12 @@ class Sidepanel extends React.Component {
       prevProps.player !== this.props.player ||
       prevProps.status !== this.props.status ||
       prevProps.editing.meta.src !== this.props.editing.meta.src ||
-      prevProps.ui.sidebarTab !== this.props.ui.sidebarTab
+      prevProps.ui.sidebarTab !== this.props.ui.sidebarTab ||
+      // scripts publish their progress OUTSIDE the player state: the line
+      // marker moves and the run starts/ends without any of the props above
+      // changing (pure-JS stretches between bridge calls log nothing)
+      prevProps.ui.scriptLine !== this.props.ui.scriptLine ||
+      prevProps.ui.scriptRunning !== this.props.ui.scriptRunning
     ) {
       this.refreshStatusText()
     }
@@ -569,6 +584,20 @@ class Sidepanel extends React.Component {
         const { status, player } = this.props
 
         const renderInner = () => {
+          // A running JS script drives its commands through the SESSION fast
+          // path, which never sets app status to PLAYER — only its occasional
+          // player-path commands (open, uiv.run) do. Statuswise the script is
+          // "not playing" most of the time, so without this the bar flickered
+          // between "Line N" and the stale result line of an EARLIER macro
+          // while a script was visibly running. ui.scriptRunning is published
+          // by the runner for exactly this; the module flag is the fallback.
+          const scriptRun = (this.props.ui && this.props.ui.scriptRunning) || isScriptRunning()
+          if (scriptRun && status !== C.APP_STATUS.RECORDER) {
+            this._lastMacroLog = null // after the run, re-read the fresh result line
+            const scriptLine = this.props.ui && this.props.ui.scriptLine
+            return scriptLine ? `Line ${scriptLine}` : 'Running'
+          }
+
           switch (status) {
             case C.APP_STATUS.RECORDER:
               return 'Recording'
@@ -668,18 +697,20 @@ class Sidepanel extends React.Component {
   getLatestMacroLog() {
     const { player, logs_ } = this.props
     if (player.status === C.PLAYER_STATUS.STOPPED && logs_ && logs_.length) {
-      // Completion lines of both runners count: the classic player writes
-      // "Macro completed (Runtime …)", a script writes "<name> completed
-      // (Runtime …)". Matched on the WORDING rather than a prefix — the script
-      // lines now lead with the macro name, which is the useful part, so there
-      // is no fixed prefix left to match. No match means no completed run yet:
-      // return '' so the macro name shows.
+      // Result lines of both runners count, success AND failure: the classic
+      // player writes "Macro completed/failed (Runtime …)" (always type info),
+      // a script writes "<name> completed (Runtime …)" (info) or "<name>
+      // failed/stopped: … (Runtime …)" (error). All of them — and only they —
+      // END with "(Runtime …)", so that is the signature matched. Matching
+      // only "completed" lines made the bar show a long-gone SUCCESS of some
+      // other macro while the macro at hand had just failed. No match means
+      // no finished run yet: return '' so the macro name shows.
       const latestMacroLogs = logs_.filter(
-        (log) => log.type === 'info' && / completed \(Runtime /.test(log.text || '')
+        (log) => (log.type === 'info' || log.type === 'error') && /\(Runtime [^)]*\)\s*$/.test(log.text || '')
       )
       const latestMacroLog = latestMacroLogs[latestMacroLogs.length - 1]
       if (latestMacroLog) {
-        return '[info] ' + latestMacroLog.text
+        return `[${latestMacroLog.type}] ` + latestMacroLog.text
       }
     }
     return ''

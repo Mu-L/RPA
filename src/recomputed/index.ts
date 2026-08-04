@@ -7,6 +7,7 @@ import { FileNodeData, FileNodeType } from '@/components/tree_file';
 import { treeMap, flatten, traverseTree, TraverseTreeResult, id, treeFilter } from '@/common/ts_utils';
 import { Without } from '@/common/types';
 import { State, FolderExtraData, RunBy, FocusArea } from '@/reducers/state';
+import { PREINSTALL_ROOT_FOLDER, PREINSTALL_CLASSIC_ROOT_FOLDER } from '@/config/preinstall_macros';
 
 export const getCurrentMacroId = createSelector(
   [
@@ -290,10 +291,20 @@ export const getMacroFileNodeData = createSelector(
       return klasses.join(' ')
     }
     const getFolded = (data: Without<EntryNode, 'children'>): boolean => {
-      const id = data.fullPath
-      const folded = macrosExtra[id] && macrosExtra[id].folded || false
+      const id    = data.fullPath
+      const extra = macrosExtra[id]
 
-      return folded
+      if (extra && typeof (extra as any).folded === 'boolean') {
+        return (extra as any).folded
+      }
+
+      // Never-toggled folders default to open — EXCEPT the shipped demo
+      // folders, which start collapsed so a fresh install (which writes the
+      // whole JS demo set) still opens with the user's own macros in view.
+      // The first manual toggle persists a folded value and wins from then on.
+      const relPath = String(data.relativePath || '').replace(/\\/g, '/')
+      return data.isDirectory &&
+        (relPath === PREINSTALL_ROOT_FOLDER || relPath === PREINSTALL_CLASSIC_ROOT_FOLDER)
     }
 
     return macroFolderStructure.map((node) => {

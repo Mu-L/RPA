@@ -1,26 +1,21 @@
 {
   "manifest_version": 3,
-
   "name": "__MSG_name__",
   "description": "__MSG_description__",
   "short_name": "__MSG_short_name__",
   "default_locale": "en",
-  "version": "10.0.32",
-
+  "version": "10.0.44",
   "icons": {
     "128": "logo128.png"
   },
-
   "action": {
     "default_icon": {
       "38": "logo38.png"
     }
   },
-
   "background": {
     "service_worker": "background.js"
   },
-
   "web_accessible_resources": [
     {
       "resources": [
@@ -34,25 +29,24 @@
       "extension_ids": []
     }
   ],
-
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
+      "matches": [
+        "<all_urls>"
+      ],
       "all_frames": true,
       "match_about_blank": true,
-      "js": ["content_script.js"],
+      "js": [
+        "content_script.js"
+      ],
       "run_at": "document_start"
     }
   ],
-
   "side_panel": {
     "default_path": "sidepanel.html"
   },
-
   "options_page": "options.html",
-
   "offline_enabled": true,
-
   "permissions": [
     "bookmarks",
     "clipboardRead",
@@ -71,18 +65,12 @@
     "webRequest",
     "webRequestAuthProvider",
     "sidePanel",
-    "scripting",
-    "tabGroups"
+    "scripting"
   ],
   "host_permissions": [
-    "\u003Call_urls>"
+    "<all_urls>"
   ],
-  
   "content_security_policy": {
-     "extension_pages": "script-src 'self' 'wasm-unsafe-eval';"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval';"
   }
 }
-
-
-
-

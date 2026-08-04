@@ -1307,13 +1307,19 @@ const runXMouseKeyboardCommand = (command: any) => {
                     // after the short cursor glide, so the real click lands once
                     // the cursor has visually arrived. Pages without a content
                     // script (or a timed-out ipc) just skip the visual.
-                    const pShowCursor = csIpc
-                      .ask('PANEL_SHOW_BROWSER_CURSOR', {
-                        x: event.x,
-                        y: event.y,
-                        isClick: event.type !== MouseEventType.Move
-                      })
-                      .catch(() => {})
+                    // "Highlight elements during replay" OFF turns this off
+                    // with the rest of the replay decoration (element masks,
+                    // blue border) — and skips the glide wait, so clicks
+                    // dispatch immediately.
+                    const pShowCursor = !store.getState().config.playHighlightElements
+                      ? Promise.resolve()
+                      : csIpc
+                          .ask('PANEL_SHOW_BROWSER_CURSOR', {
+                            x: event.x,
+                            y: event.y,
+                            isClick: event.type !== MouseEventType.Move
+                          })
+                          .catch(() => {})
                     return pShowCursor
                       .then(() => getState())
                       .then((state: any) => sendCdpMouseEvent(state.tabIds.toPlay, event))

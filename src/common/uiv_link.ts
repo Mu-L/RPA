@@ -3,16 +3,23 @@ import { isSidePanelWindow } from '@/common/utils'
 
 // go.ui.vision help links carry which interface they came from plus the
 // extension version — the redirect worker logs these and the /report page
-// splits the counts by gui=sidebar|ide.
-export function goUivUrl (url: string): string {
+// splits the counts by gui=sidebar|ide|settings (settings = the shared
+// options.html page, which any surface may have opened).
+//
+// Pass `gui` to override that guess. The background opens three pages nobody
+// clicked (install, upgrade, uninstall) and passes 'bg': in a service worker
+// isSidePanelWindow() has no window to look at and answers false, so those
+// would otherwise report as 'ide' and inflate exactly the split this measures.
+export function goUivUrl (url: string, gui?: string): string {
   try {
     if (!/^https:\/\/go\.ui\.vision\//.test(url)) return url
     if (/[?&]gui=/.test(url)) return url
 
-    const gui = isSidePanelWindow() ? 'sidebar' : 'ide'
+    const onSettingsPage = typeof window !== 'undefined' && window.location.pathname.includes('options.html')
+    const gui_ = gui || (isSidePanelWindow() ? 'sidebar' : onSettingsPage ? 'settings' : 'ide')
     const version = Ext.runtime.getManifest().version
     const sep = url.includes('?') ? '&' : '?'
-    return `${url}${sep}gui=${gui}&version=${encodeURIComponent(version)}`
+    return `${url}${sep}gui=${gui_}&version=${encodeURIComponent(version)}`
   } catch (e) {
     return url
   }
@@ -23,7 +30,9 @@ export function goUivUrl (url: string): string {
 // and the extension version, so the server logs show which interface the AI
 // chat is used from. Other providers (OpenRouter, local) get the plain URL.
 export function chatCompletionsUrl (baseURL: string): string {
-  const url = `${baseURL.replace(/\/$/, '')}/chat/completions`
+  // tolerate a pasted baseURL that already ends in /chat/completions
+  const trimmed = String(baseURL || '').replace(/\/+$/, '')
+  const url = /\/chat\/completions$/.test(trimmed) ? trimmed : `${trimmed}/chat/completions`
   try {
     if (!/\bai\.ui\.vision\b/i.test(baseURL)) return url
 

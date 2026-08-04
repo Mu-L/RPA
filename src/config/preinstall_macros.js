@@ -589,7 +589,7 @@ const preinstallMacros = {
       },
       {
         "Command": "click",
-        "Target": "//span[contains(text(),\"Ui.Vision IDE\")]",
+        "Target": "//span[contains(text(),\".Vision IDE\")]",
         "Value": ""
       },
       {
@@ -1229,7 +1229,7 @@ const preinstallMacros = {
       },
       {
         "Command": "click",
-        "Target": "//span[contains(text(),\"Ui.Vision IDE\")]",
+        "Target": "//span[contains(text(),\".Vision IDE\")]",
         "Value": "",
         "Description": ""
       },
@@ -1607,7 +1607,7 @@ const preinstallMacros = {
       },
       {
         "Command": "click",
-        "Target": "//span[contains(text(),\"Ui.Vision IDE\")]",
+        "Target": "//span[contains(text(),\".Vision IDE\")]",
         "Value": "",
         "Description": ""
       },
@@ -3622,36 +3622,33 @@ const preinstallMacros = {
   }
   }
 
-// Everything preinstalled lives below ONE top-level folder, so the tree opens
-// with the user's own macros at the root and the shipped material tucked away
-// in a folder whose name says what it is.
+// One top-level folder per macro type, so the tree opens with the user's own
+// macros at the root and the shipped material tucked away in folders whose
+// names say what they are. (There used to be ONE root with "JS" and "Classic"
+// sub-folders; the extra level was dropped so the demo categories sit directly
+// below the root folder.)
 // Note: the "AI Generated" folder is NOT preinstalled — the AI chat creates it
 // on demand, at the root.
-export const PREINSTALL_ROOT_FOLDER = 'Demo and QA Test Scripts'
-
-// All preinstalled table macros live below "Classic" (incl. the LLM AI Commands
-// demos).
 // Keep the folder names in sync with isUntouchedPreinstallDemo in
 // services/ai/macro_agent/tools.ts (which recognizes demos by path) and
-// CLASSIC_DEMO_FOLDER in recomputed/index.ts (which hides Classic in
-// JS-first mode).
+// getFolded in recomputed/index.ts (which starts these folders collapsed).
+export const PREINSTALL_ROOT_FOLDER = 'Demo and QA Test Scripts'
+export const PREINSTALL_CLASSIC_ROOT_FOLDER = 'Demo and QA Test Scripts (Classic)'
+
+// All preinstalled table macros (incl. the LLM AI Commands demos). Installed
+// only via the Settings restore button, never on install.
 export const CLASSIC_PREINSTALL = Object.keys(preinstallMacros).reduce((acc, key) => {
-  acc[`${PREINSTALL_ROOT_FOLDER}/Classic/${key}`] = preinstallMacros[key]
+  acc[`${PREINSTALL_CLASSIC_ROOT_FOLDER}/${key}`] = preinstallMacros[key]
   return acc
 }, {})
 
-// Two sub-folders, one per macro type: "Classic" (command tables) and "JS"
-// (script macros), mirroring each other name for name and folder for folder.
-// In JS-first mode only "JS" is shown — the Classic folder is hidden by the
-// tree, not removed. Script macros keep the normal macro JSON envelope but
+// The JS script macros. Script macros keep the normal macro JSON envelope but
 // carry the program in `Script` (Commands stays an empty array) — see
-// fromJSONString. (Folders were "1js", then "Demos"/"Test_Cases_For_QA", then
-// top-level "Classic"/"JS".)
+// fromJSONString.
 // `path` mirrors the classic folder structure for the ported macros
-// (JS/Core/DemoAutofill.js next to Classic/Core/DemoAutofill); the
-// hand-written demos have no path and stay at the JS root.
+// (Core/DemoAutofill.js next to the classic Core/DemoAutofill).
 export const JS_PREINSTALL = JS_DEMOS.reduce((acc, demo) => {
-  acc[`${PREINSTALL_ROOT_FOLDER}/JS/${demo.path || demo.fileName}`] = {
+  acc[`${PREINSTALL_ROOT_FOLDER}/${demo.path || demo.fileName}`] = {
     CreationDate: '2026-07-24',
     Commands: [],
     Script: demo.code
@@ -3659,7 +3656,9 @@ export const JS_PREINSTALL = JS_DEMOS.reduce((acc, demo) => {
   return acc
 }, {})
 
-// NOTHING is auto-installed from these sets anymore: a fresh install starts
-// with an empty macro tree (less noise, and no stale-demo upgrade dialogs).
-// The two "Restore Demo Macros" buttons under Settings > General write one
-// set each, on demand — see restoreDemoMacros in actions/index.js.
+// A fresh install gets the JS set (plus the three root-level welcome macros)
+// automatically — see tryPreinstall in src/index.js; the folder starts
+// collapsed (getFolded in recomputed/index.ts). The classic set is NEVER
+// auto-installed: it arrives only via the "Restore Demo Macros (Classic)"
+// button under Settings > General, which writes it in its shipped state —
+// see restoreDemoMacros in actions/index.js.

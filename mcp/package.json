@@ -1,6 +1,6 @@
 {
   "name": "uivision-mcp-bridge",
-  "version": "1.0.29",
+  "version": "1.1.1",
   "description": "MCP bridge: lets Claude Code (or any MCP client) build and run Ui.Vision RPA macros via the browser extension",
   "main": "uivision-mcp-bridge.js",
   "bin": {

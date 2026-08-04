@@ -19,7 +19,7 @@ import { fromJSONString } from '@/common/convert_utils'
 //   fillContactForm('Tom', 'tom@example.com');
 //
 // The path is the one shown in the macro tree, folders included — e.g.
-// "Demo and QA Test Scripts/JS/Core/Sub/Sub_DemoCsvRead_FillForm.js".
+// "Demo and QA Test Scripts/Core/Sub/Sub_DemoCsvRead_FillForm.js".
 //
 // An included file can still be opened and run on its own: `uiv.main` is true
 // only for the macro the user actually started, so a self-test block guarded

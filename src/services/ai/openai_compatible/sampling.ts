@@ -35,9 +35,11 @@ export interface OpenAICompatSamplingParams {
 // Per-model-family coordinate convention. Getting this wrong doesn't error —
 // it clicks in the wrong place — so keep this table in sync with the curated
 // model list in the AI settings tab, and smoke-test any model added there.
-type CoordSpace = 'absolute' | 'normalized-1000'
+// Shared with the aiScreenXY/ai.find path (vision_prompt/service.ts), which
+// scales the same way from the same table.
+export type CoordSpace = 'absolute' | 'normalized-1000'
 
-const coordSpaceForModel = (model: string): CoordSpace => {
+export const coordSpaceForModel = (model: string): CoordSpace => {
   if (/gemini/i.test(model)) return 'normalized-1000'
   // Qwen3 VL family answers in 0-1000 normalized coordinates (verified
   // empirically with qwen3.7-plus, 2026-07: clicks landed at exactly
@@ -268,6 +270,15 @@ class OpenAICompatSampling implements ISamplingEngine {
               content: `Invalid tool arguments (not JSON): ${String(toolCall.function?.arguments).slice(0, 200)}`
             })
             continue
+          }
+
+          // Check again here, not only at the top of the loop: an API call
+          // takes seconds, and a stop that arrives during one must not still
+          // cost the user a click or a keystroke in the page — by the time an
+          // action lands, the next macro may already own that tab.
+          const stopBeforeAction = this.params.getTerminationRequest(this.loopCompletedCount)
+          if (stopBeforeAction) {
+            return { messages: this.messages, stopReason: stopBeforeAction }
           }
 
           const internalAction = this.toInternalAction(args)

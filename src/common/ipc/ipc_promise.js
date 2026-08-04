@@ -166,11 +166,11 @@ function ipcPromise (options) {
           // console.log('== args:>> ', args)
           // console.log('== timeout:>> ', timeout)
           // console.log('== timeoutToOverride:>> ', timeoutToOverride)
-          // console.log('== finalTimeout:>> ', finalTimeout) 
+          // console.log('== finalTimeout:>> ', finalTimeout)
           reject = askCache[uid][1];
           askCache[uid] = TO_BE_REMOVED;
           console.error('ipcPromise: onAsk timeout ' + finalTimeout + ' for cmd "' + cmd + '", args '  + stringify(args));
-          const errMsg = `Error #102: Lost contact to website`;
+          const errMsg = `Error #102: Lost contact to website — no answer to '${describeAsk(cmd, args)}' after ${finalTimeout / 1000}s`;
           reject(new Error(errMsg));
         }
       }, finalTimeout);
@@ -296,6 +296,31 @@ ipcPromise.serialize = function (obj) {
 
 function stringify (v) {
   return v === undefined ? 'undefined' : JSON.stringify(v)
+}
+
+// Name the ask that ran out, for the #102 message.
+//
+// Every ipc timeout used to report the same bare "Lost contact to website", but
+// the asks behind it have caps three orders of magnitude apart — a 100ms tab
+// probe, a 4s bookkeeping ping (CS_IPC_TIMEOUT), a 60s page load — and the
+// message told you neither which one nor how long it actually waited. So a
+// #102 was unactionable: "the page died" and "a busy page missed a 4s ping"
+// looked identical in the log.
+//
+// The panel wraps everything it sends the play tab in PANEL_CALL_PLAY_TAB, so
+// the interesting name is one or two levels down: the content-script command
+// (DOM_READY, MARK_NO_COMMANDS_YET, RUN_COMMAND, ...) and, for RUN_COMMAND,
+// the macro command it carries.
+function describeAsk (cmd, args) {
+  try {
+    const payload = args && args.payload
+    if (!payload || !payload.command) return cmd
+
+    const inner = payload.args && payload.args.command && payload.args.command.cmd
+    return inner ? `${payload.command} ${inner}` : `${cmd} / ${payload.command}`
+  } catch (e) {
+    return cmd
+  }
 }
 
 module.exports = ipcPromise;

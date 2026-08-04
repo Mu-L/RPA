@@ -1,4 +1,6 @@
 import { getAIProviderConfig } from '@/services/ai/computer_use/service'
+import { chatCompletionsUrl } from '@/common/uiv_link'
+import { CoordSpace, coordSpaceForModel } from '@/services/ai/openai_compatible/sampling'
 
 // OpenAI-compatible vision calls for aiPrompt and aiScreenXY.
 //
@@ -24,11 +26,6 @@ export type VisionResult = {
 // Same ceiling AnthropicService uses, for the same reason: a full-resolution
 // screenshot is mostly wasted tokens, and every provider bills for them.
 const MAX_PIXELS = 1191888
-
-const chatCompletionsUrl = (baseURL: string): string => {
-  const trimmed = String(baseURL || '').replace(/\/+$/, '')
-  return /\/chat\/completions$/.test(trimmed) ? trimmed : `${trimmed}/chat/completions`
-}
 
 /**
  * Scale a PNG down to the pixel ceiling. Returns the bytes to send plus the
@@ -64,15 +61,25 @@ export async function scaleForVision (
 const toDataUrl = (buffer: ArrayBuffer): string =>
   `data:image/png;base64,${Buffer.from(buffer as any).toString('base64')}`
 
+export type OpenAICompatAnswer = {
+  text: string
+  // coordinate convention for THIS answer, best source first: the
+  // X-Coord-Space response header (the Ui.Vision proxy sends it, so rolled-out
+  // extensions keep clicking correctly when the server swaps models), then the
+  // model id the response reports, then the configured model. Same priority
+  // chain the computer-use loop uses (see openai_compatible/sampling.ts).
+  coordSpace: CoordSpace
+}
+
 /**
  * One round trip to whatever OpenAI-compatible endpoint is configured
- * (the Ui.Vision free tier, OpenRouter, a local server). Returns the reply text.
+ * (the Ui.Vision free tier, OpenRouter, a local server).
  */
 export async function askOpenAICompatible (
   promptText: string,
   imageBuffers: Array<ArrayBuffer | null | undefined>,
   task: string = 'unknown'
-): Promise<string> {
+): Promise<OpenAICompatAnswer> {
   const providerConfig = getAIProviderConfig()
 
   const content: any[] = [{ type: 'text', text: promptText }]
@@ -81,6 +88,18 @@ export async function askOpenAICompatible (
     const scaled = await scaleForVision(buffer)
     content.push({ type: 'image_url', image_url: { url: toDataUrl(scaled.buffer) } })
   }
+
+  const body: any = {
+    model: providerConfig.model,
+    max_tokens: 1024,
+    messages: [{ role: 'user', content }]
+  }
+  // Reasoning models burn "thinking" tokens against max_tokens and then return
+  // an EMPTY answer at 1024 (measured with qwen3.7-flash, 2026-08: every ai.find
+  // reply came back blank). Same fix as the chat and computer-use loops:
+  // OpenRouter's unified param, only sent there (local endpoints may not know
+  // it, and the Ui.Vision proxy forces it server-side anyway).
+  if (/openrouter\.ai/i.test(providerConfig.baseURL)) body.reasoning = { enabled: false }
 
   const res = await fetch(chatCompletionsUrl(providerConfig.baseURL), {
     method: 'POST',
@@ -98,11 +117,7 @@ export async function askOpenAICompatible (
       'X-UIV-Task': task,
       'X-Title': 'Ui.Vision RPA'
     },
-    body: JSON.stringify({
-      model: providerConfig.model,
-      max_tokens: 1024,
-      messages: [{ role: 'user', content }]
-    })
+    body: JSON.stringify(body)
   })
 
   if (!res.ok) {
@@ -110,6 +125,7 @@ export async function askOpenAICompatible (
     throw new Error(`E353: ${providerConfig.label} API returned HTTP ${res.status}. ${detail.slice(0, 300)}`)
   }
 
+  const headerSpace = res.headers.get('x-coord-space')
   const json: any = await res.json()
   const text = json && json.choices && json.choices[0] && json.choices[0].message
     ? json.choices[0].message.content
@@ -118,7 +134,13 @@ export async function askOpenAICompatible (
   if (typeof text !== 'string' || !text.length) {
     throw new Error(`E353: ${providerConfig.label} returned no answer.`)
   }
-  return text
+
+  const coordSpace: CoordSpace =
+    headerSpace === 'normalized-1000' || headerSpace === 'absolute'
+      ? headerSpace
+      : coordSpaceForModel(typeof json.model === 'string' && json.model ? json.model : providerConfig.model)
+
+  return { text, coordSpace }
 }
 
 /**
@@ -150,8 +172,8 @@ export async function visionPrompt (
   searchImageBuffer: ArrayBuffer | null,
   promptText: string
 ): Promise<VisionResult> {
-  const aiResponse = await askOpenAICompatible(promptText, [mainImageBuffer, searchImageBuffer], 'ai.ask')
-  return { coords: parseCoordsFromText(aiResponse), isSinglePoint: true, aiResponse }
+  const answer = await askOpenAICompatible(promptText, [mainImageBuffer, searchImageBuffer], 'ai.ask')
+  return { coords: parseCoordsFromText(answer.text), isSinglePoint: true, aiResponse: answer.text }
 }
 
 /**
@@ -168,23 +190,38 @@ export async function visionLocate (
 ): Promise<VisionResult> {
   const scaled = await scaleForVision(imageBuffer)
 
-  const prompt =
-    `${promptText}. Analyze the provided image (${scaled.width} x ${scaled.height} pixels). ` +
-    'Reply with ONLY the x,y pixel coordinates of that element in the image, in the format x,y — no words, no units, no explanation.'
+  // Prompt wording follows the CONFIGURED model's convention (the free tier
+  // hides the real model until the response arrives — a Qwen that gets the
+  // pixel wording still answers normalized, which the scaling below corrects).
+  const wantsNormalized = coordSpaceForModel(getAIProviderConfig().model) === 'normalized-1000'
+  const coordFormat = wantsNormalized
+    ? 'Reply with ONLY the x,y coordinates of that element normalized to a 0-1000 scale, where 0,0 is the top-left and 1000,1000 the bottom-right of the image, in the format x,y — no words, no units, no explanation.'
+    : 'Reply with ONLY the x,y pixel coordinates of that element in the image, in the format x,y — no words, no units, no explanation.'
+  const prompt = `${promptText}. Analyze the provided image (${scaled.width} x ${scaled.height} pixels). ${coordFormat}`
 
   // aiScreenXY is the one that needs real spatial grounding — the task most
   // worth routing to a stronger model
-  const aiResponse = await askOpenAICompatible(prompt, [scaled.buffer], 'ai.find')
-  const scaledCoords = parseCoordsFromText(aiResponse)
+  const answer = await askOpenAICompatible(prompt, [scaled.buffer], 'ai.find')
+  const rawCoords = parseCoordsFromText(answer.text)
 
-  if (!scaledCoords.length) {
-    return { coords: [{ x: 0, y: 0 }], isSinglePoint: false, aiResponse }
+  if (!rawCoords.length) {
+    return { coords: [{ x: 0, y: 0 }], isSinglePoint: false, aiResponse: answer.text }
   }
+
+  // Two conversions, in order: (1) the model's coordinate convention into
+  // pixels of the SENT (possibly downscaled) image — Qwen3-VL and Gemini
+  // answer 0-1000 normalized regardless of what the prompt asked for
+  // (measured 2026-08-04: raw qwen3.7-plus replies were exactly pos/size*1000,
+  // 0/14 target hits read as pixels, 12/13 rescaled) — then (2) the sent
+  // image's scale factor back out, so the caller gets ORIGINAL-image pixels.
+  const scaledCoords = answer.coordSpace === 'normalized-1000'
+    ? rawCoords.map(c => ({ x: (c.x / 1000) * scaled.width, y: (c.y / 1000) * scaled.height }))
+    : rawCoords
 
   const coords = scaledCoords.map(c => ({
     x: Math.round(c.x / scaled.scaleFactor),
     y: Math.round(c.y / scaled.scaleFactor)
   }))
 
-  return { coords, isSinglePoint: true, aiResponse }
+  return { coords, isSinglePoint: true, aiResponse: answer.text }
 }

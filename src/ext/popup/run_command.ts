@@ -1,3 +1,5 @@
+import * as act from '@/actions'
+import { store } from '@/redux'
 import { isFirefox } from '@/common/dom_utils'
 import { getState, updateState, ExtensionState } from '../common/global_state'
 import { Command } from '@/services/player/macro'
@@ -62,7 +64,7 @@ export async function runCommandInPlayTab(command: Command): Promise<RunCommandR
       ipcCallTimeout: timeoutPageLoad
     })
 
-    const promise2 = callPlayTab({
+    const promise2 = bestEffortPlayTabCall({
       command: 'HACK_ALERT',
       args: {},
       ipcCallTimeout: C.CS_IPC_TIMEOUT
@@ -138,6 +140,56 @@ function callPlayTab<T = any>(params: PlayTabIPCParams): Promise<T> {
       }
     },
     ipcCallTimeout
+  )
+}
+
+// Recovered-from trouble goes in the log as INFO, not as a warning.
+//
+// A user should not have to care that a page missed a ping and the command was
+// retried: it worked, and a yellow line invites a support ticket about a
+// non-problem. But the run log is also what the sidebar AI macro agent reads to
+// decide whether a macro needs fixing (see services/ai/macro_agent), and what
+// comes back over the MCP bridge — and to those readers "passed" and "passed on
+// the second try, after a 4s stall" are very different facts. Info says it
+// without alarming anyone.
+//
+// Routed panel-side on purpose. The old Warning #300 was sent with
+// callPlayTab({command: 'ADD_LOG'}), i.e. panel -> bg -> the PLAY TAB, whose
+// content script has no ADD_LOG handler at all — the panel was posting a log
+// line to itself by way of the web page, and the page dropped it. (The handler
+// that does exist is the panel's own, in src/index.js, reached the other way
+// round by the content script's CS_ADD_LOG.) Worse, that ipc runs with
+// timeout -1, so every one of those calls left a promise that never settled.
+function logToPanel(message: string): void {
+  try {
+    store.dispatch(act.addLog('info', message))
+  } catch (e) {
+    log.warn('could not log to panel:', message)
+  }
+}
+
+// Bookkeeping pings to the play tab — they set a flag or a status, and nothing
+// downstream reads the ANSWER. Each one is capped at CS_IPC_TIMEOUT (4s), which
+// a live but BUSY page misses easily: a heavy first load (a Google Forms page,
+// any big SPA) keeps the main thread blocked well past that while it renders,
+// so the ping sits in the queue and the ipc rejects with Error #102 — killing
+// a macro whose page was, in fact, perfectly fine.
+//
+// Failing the run on an unanswered ping is the wrong trade. None of these is
+// load-bearing on its own: SET_STATUS is re-sent before every single command
+// (sendRunCommand), HACK_ALERT is re-applied by the SET_STATUS handler in the
+// content script, and MARK_NO_COMMANDS_YET only lets an already-loaded page
+// skip a redundant re-navigation. Warn and carry on; a page that is genuinely
+// gone still fails at the next real command, with a real error.
+function bestEffortPlayTabCall(params: PlayTabIPCParams): Promise<void> {
+  return callPlayTab(params).then(
+    () => {},
+    () => {
+      logToPanel(
+        `#301: the page was busy and did not answer the '${params.command}' status ping within ` +
+          `${(params.ipcCallTimeout || 0) / 1000}s — continuing (it is re-sent with the next command)`
+      )
+    }
   )
 }
 
@@ -454,14 +506,15 @@ async function runCommandWithRetry(command: Command): Promise<RunCommandResult> 
       // Note: for rare cases when guest page doesn't respond to RUN_COMMAND, it will timeout for `timeoutElement`
       // And we should retry RUN_COMMAND for only once in that case, and also show this as warning to users
       // related issue: #513
-      if (/ipcPromise.*timeout/i.test(e.message)) {
+      //
+      // `Error #102` is what an ipc timeout actually looks like today (see
+      // ipc_promise.js) — the /ipcPromise.*timeout/ pattern matches a message
+      // that string was replaced by, so this whole retry, and the Warning #300
+      // that goes with it, had quietly stopped happening: every transient ipc
+      // timeout failed the macro on the first try.
+      if (/ipcPromise.*timeout/i.test(e.message) || /Error #102/.test(e.message)) {
         if (retryCountOnIpcTimeout < maxRetryOnIpcTimeout) {
-          callPlayTab({
-            command: 'ADD_LOG',
-            args: {
-              warning: 'Warning #300: Web page connection issue. Retrying last command.'
-            }
-          })
+          logToPanel(`#300: the page did not answer in time, retrying this command once — ${e.message}`)
 
           retryCountOnIpcTimeout++
           return true
@@ -971,14 +1024,14 @@ function preparePlayTab(command: Command): Promise<boolean> {
               )
               .then(async () => {
                 if (hasOpenedUrl) {
-                  await callPlayTab({
+                  await bestEffortPlayTabCall({
                     command: 'MARK_NO_COMMANDS_YET',
                     args: {},
                     ipcCallTimeout: C.CS_IPC_TIMEOUT
                   })
                 }
 
-                await callPlayTab({
+                await bestEffortPlayTabCall({
                   command: 'SET_STATUS',
                   args: { status: C.CONTENT_SCRIPT_STATUS.PLAYING },
                   ipcCallTimeout: C.CS_IPC_TIMEOUT

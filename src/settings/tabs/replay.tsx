@@ -47,7 +47,7 @@ class ReplayTab extends React.Component<ReplayTabProps> {
             }
             checked={config.playHighlightElements}
           >
-            Highlight elements during replay
+            Replay animations (adds ~0.2s per command)
           </Checkbox>
         </Form.Item>
 

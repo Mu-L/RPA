@@ -1,6 +1,7 @@
 // JS script macro demos (V11 prototype, branch js-macro-test1).
 // Single source for BOTH the Examples dropdown in the script view AND the
-// preinstalled files in the tree's "JS" folder. File names end in ".js" —
+// preinstalled files in the tree's "Demo and QA Test Scripts" folder. File
+// names end in ".js" —
 // the suffix marks a script macro in the tree (JS badge icon); the macro
 // data's `Script` field is what actually routes it to the JS editor.
 //
@@ -36,7 +37,7 @@ export const STARTER_SCRIPT = `// Ui.Vision JS script - modern JavaScript
 //     p.type('id=email', 'a@b.com');  b.click(uiv.findImage('buy.png'));
 // NAVIGATE: uiv.open(url)   uiv.eval('return document.title')
 //           the current URL is uiv.eval('return location.href') — !URL is table-macros-only
-// MISC: uiv.log(msg, 'green')   uiv.sleep('1s')   uiv.getVar('!CURRENT_TAB_NUMBER')   uiv.setVar('n', 1)
+// MISC: uiv.log(msg, 'green')   uiv.sleep('1s')   uiv.getVar('!COL1')   uiv.setVar('n', 1)
 //       uiv.exit('reason')  -> end the run EARLY AS A SUCCESS (guard clauses;
 //       a failed check still uses throw new Error(...))
 // Long forms with options: uiv.findElements / findImages / ocr.findTexts
@@ -138,8 +139,8 @@ uiv.open('https://excalidraw.com/');
 // keeps the banner on screen. (!BROWSER is read after the first uiv
 // command on purpose: before it, no special variable is set yet.)
 if (uiv.getVar('!BROWSER') === 'firefox') {
-  uiv.banner('This drawing demo uses trusted CDP input (uiv.browser.*), which only <b>Chrome and Edge</b> support. For Firefox there is an <b>XClick version</b>: "Draw a cat🐱 - XClick version" in the demo collection (Settings > General > For Tech Support/QA > Restore Demo Macros (JavaScript), folder JS > XModules).', { seconds: 25 });
-  uiv.exit('Firefox detected — this demo needs Chrome or Edge. Use "Draw a cat🐱 - XClick version" from Demo and QA Test Scripts > JS > XModules instead.');
+  uiv.banner('This drawing demo uses trusted CDP input (uiv.browser.*), which only <b>Chrome and Edge</b> support. For Firefox there is an <b>XClick version</b>: "Draw a cat🐱 - XClick version" in the demo collection, folder Demo and QA Test Scripts > XModules (if the folder is missing: Settings > General > For Tech Support/QA > Restore Demo Macros (JavaScript)).', { seconds: 25 });
+  uiv.exit('Firefox detected — this demo needs Chrome or Edge. Use "Draw a cat🐱 - XClick version" from Demo and QA Test Scripts > XModules instead.');
 }
 
 uiv.banner('<b>Ui.Vision drawing demo</b> — this macro is not affiliated with or endorsed by Excalidraw.', { seconds: 10 });
@@ -248,21 +249,26 @@ uiv.log('Cat + greeting drawn: ' + counts.ellipse + ' ellipses, ' + counts.line 
 
 export const JS_DEMOS = [
   {
-    // no path: the welcome tour sits at the JS root of the demo folder, the
-    // same macro a fresh install gets at the tree root
+    // a fresh install also writes this macro at the TREE root (see
+    // installWelcomeMacro); this copy in the demo folder is what the
+    // restore button brings back after the root copy is deleted
     fileName: 'A short welcome tour.js',
+    path: 'Core/A short welcome tour.js',
     title: 'Welcome tour (JS)',
     code: WELCOME_SCRIPT
   },
   {
-    // no path: preinstalled at the tree root like the welcome tour
+    // also written at the tree root on a fresh install, like the welcome tour
     fileName: 'Like Ui.Vision？Give us a star 🌟.js',
+    path: 'Core/Like Ui.Vision？Give us a star 🌟.js',
     title: 'Star on GitHub (JS)',
     code: STAR_SCRIPT
   },
   {
-    // no path: preinstalled at the tree root like the welcome tour
+    // also written at the tree root on a fresh install; CDP input, so it
+    // lives with the other Chrome/Edge-only demos
     fileName: 'Draw a cat🐱.js',
+    path: 'Browser Vision (Chrome, Edge)/Draw a cat🐱.js',
     title: 'Draw a cat (JS)',
     code: CAT_SCRIPT
   },
@@ -329,7 +335,7 @@ for (let i = 1; i <= 5; i++) {
 // has an agent in every frame); such matches carry frame-local coords
 // and a frameLocal flag, and uiv.page.* routes them to a DOM action
 // inside that frame.
-uiv.page.click(uiv.$('xpath=//span[contains(text(),"Ui.Vision IDE")]'));
+uiv.page.click(uiv.$('xpath=//span[contains(text(),".Vision IDE")]'));
 
 // several text inputs exist on this page (the 5 frame fields above!) —
 // pick the one inside the cross-origin form via the frameLocal flag
@@ -355,7 +361,7 @@ uiv.open('https://ui.vision/demo/iframes');
 
 // every target lives INSIDE the iframe, so each one goes through the
 // frame-piercing finder; uiv.page.* acts on the match in the right frame
-uiv.page.click(uiv.$('xpath=//span[contains(text(),"Ui.Vision IDE")]'));
+uiv.page.click(uiv.$('xpath=//span[contains(text(),".Vision IDE")]'));
 uiv.page.type(uiv.$('xpath=//input[@type="text"]'), 'Automating a cross-origin iframe from JS');
 
 // to page 2 of the form ("Next" localizes, so match both)
@@ -382,7 +388,7 @@ uiv.log('DemoIframe (JS) completed - page 2 of a cross-origin iframe form', 'gre
 uiv.setVar('!TIMEOUT_PAGELOAD', 60);
 uiv.open('https://docs.google.com/forms/d/1cbI5dMRs0-t_IwNzPm6T3lAG_nPgsnJZEA-FEYVARxg/');
 
-uiv.page.click('xpath=//span[contains(text(),"Ui.Vision IDE")]');
+uiv.page.click('xpath=//span[contains(text(),".Vision IDE")]');
 uiv.page.click("xpath=//*[text()[contains(.,'Web Testing')]]");
 uiv.page.click('xpath=//span[contains(text(),"Form Autofilling")]');
 uiv.page.click('xpath=//*[text()[contains(.,"General Web Automation")]]');
@@ -424,15 +430,16 @@ uiv.log(\`Title check passed: \${title}\`, 'green');
 // previous command left off.
 uiv.open('https://ui.vision/demo/tabs');
 
-// Special variables work in JS by name, exactly as in a table macro:
-// uiv.getVar('!CURRENT_TAB_NUMBER') is the live 0-based tab index.
-// The classic macro also prints \${!current_tab_number_relative} (distance
-// from the tab the run started on). That one is DEPRECATED and throws in a
-// script — every uiv call is its own mini player run and re-baselines it —
-// so capture the start index once and subtract: same numbers, same asserts.
-const startTabIndex = Number(uiv.getVar('!CURRENT_TAB_NUMBER'));
-
-const tabAbs = () => Number(uiv.getVar('!CURRENT_TAB_NUMBER'));
+// Tab position comes from the uiv.tabs API, not a !variable: the classic
+// \${!CURRENT_TAB_NUMBER} / \${!current_tab_number_relative} pair is
+// table-macro bookkeeping and THROWS in a script — only classic-player
+// commands refresh it, so next to uiv.tabs.* it goes silently stale.
+// Every uiv.tabs.* call returns where you are, and uiv.tabs.list() marks
+// the tab the script acts on with current: true. Indexes are 1-based,
+// what the tab bar shows. For the classic macro's "relative" numbers,
+// capture the start index once and subtract: same numbers, same asserts.
+const tabAbs = () => uiv.tabs.list().find((t) => t.current).index;
+const startTabIndex = tabAbs();
 const tabRel = () => tabAbs() - startTabIndex;
 const logTabs = (color) => {
   uiv.log(\`TabIndexAbsolute=\${tabAbs()} TabIndexRELATIVE=\${tabRel()}\`, color);
@@ -515,148 +522,6 @@ if (tabAbs() !== afterFirstOpen + 1) {
 // that is why.
 assertTabRel(3, 'final');
 uiv.log('DemoTabs (JS) completed', 'green');
-`
-  },
-  {
-    fileName: 'DemoCsv.js',
-    title: 'CSV read/write (JS)',
-    code: `// CSV files are plain 2D JS arrays (Data tab -> CSV holds them).
-// No variable pool, no !csvLine accumulator: read gives you an array,
-// write takes one, append adds a row.
-const out = [['name', 'qty']];
-
-for (let i = 1; i <= 3; i++) {
-  out.push([\`item\${i}\`, String(i * 10)]);
-}
-
-uiv.csv.write('js_demo.csv', out);
-uiv.log(\`Saved js_demo.csv with \${out.length - 1} data rows\`);
-
-// append adds ONE row and creates the file if it is not there yet —
-// this is how a macro logs a result per run
-uiv.csv.append('js_demo.csv', ['item4', '40']);
-
-const rows = uiv.csv.read('js_demo.csv');
-uiv.log(\`Read back \${rows.length} rows:\`);
-
-for (const row of rows) {
-  uiv.log(\`  \${row.join(' | ')}\`);
-}
-
-uiv.log(\`CSV files stored: \${uiv.csv.list().join(', ')}\`, 'green');
-`
-  },
-  {
-    fileName: 'DemoVisionOcr.js',
-    title: 'Vision + OCR (JS)',
-    code: `// The VISUAL finders work on anything the eye can see — any frame,
-// any shadow root, canvas, even cross-origin iframes.
-uiv.open('https://ui.vision/demo/webtest/frames/');
-
-// The try/catch here is for a real ERROR: OCR can be switched off in Settings,
-// and then every OCR call fails. It is NOT a stand-in for "the text might not
-// be there" — that is what {required: false} does, further down. Keeping the
-// two apart is what stops a genuine failure being logged as "not found".
-try {
-  // ALWAYS start with a full read of the page. uiv.ocr.read() hands back
-  // everything OCR recognised as one string — the script form of the
-  // "Show OCR Overlay" button in Settings > OCR. OCR is the one finder that
-  // can fail because the text was MISREAD rather than absent, and no timeout
-  // tells those apart. Reading first does:
-  //   in the text          -> ocr.findText is the right tool. Use it, buttons
-  //     included: no image file to maintain, and it survives a redesign, a
-  //     theme change, a different DPI and a different screen size.
-  //   not in the text at all -> THIS ENGINE cannot read it, however long
-  //     ocr.findText waits and however you reword it. Change the READER, not the
-  //     technique:
-  //       1. THE MODEL: uiv.ai.find('the blue "Accept all" button') returns a
-  //          match like any finder, and an LLM reads what the local engine
-  //          cannot. No image file needed. It does NOT auto-wait and each call
-  //          is billable — wait for the page yourself first.
-  //       2. A PICTURE: save the target (the Image button in Script tools) and
-  //          uiv.findImage('file.png') — pixels match or they do not. The
-  //          choice for a fixed graphic, or when no AI is configured.
-  //       3. ANCHOR on a word OCR DID read, and step to the target from it:
-  //            uiv.browser.click(uiv.offset(uiv.ocr.findText('Privacy Policy'), 420, -30))
-  //          which is the JS answer to the classic word#R420,-30 relative
-  //          targets. There is deliberately NO relative command in uiv.* — a
-  //          finder plus uiv.offset composes one, so there is nothing extra to
-  //          learn. Unreadable buttons usually sit a fixed distance from
-  //          perfectly readable body text, and the recognised text above is
-  //          the menu of anchors to choose from.
-  //     A DOM locator beats all three where one exists; another engine sometimes
-  //     rescues it: uiv.ocr.read({engine: 2}). The built-in Javascript OCR
-  //     loses light-on-dark button labels (a white "Accept all" on a blue
-  //     button) and small glyphs most often — cookie and consent dialogs are
-  //     image work, not OCR work.
-  //   in it, but misspelled  -> match the typo with wildcards, per word:
-  //     uiv.ocr.findText('Text b*x inside')
-  //   in it several times    -> ocr.findText returns the FIRST; use ocr.findTexts and
-  //     index the one you actually meant.
-  const seen = uiv.ocr.read();
-  uiv.log(\`OCR recognised: \${seen}\`, 'blue');
-
-  const WORD = 'Text box inside';
-  if (seen.toLowerCase().indexOf(WORD.toLowerCase()) === -1) {
-    uiv.log(\`"\${WORD}" is NOT in the recognised text — searching for it would only fail slowly\`, 'orange');
-  }
-
-  // now the search itself, knowing what to expect from it
-  const hits = uiv.ocr.findTexts(WORD, { required: false, timeout: 5 });
-  uiv.log(\`OCR found \${hits.length} spot(s) matching "\${WORD}"\`);
-
-  if (hits.length > 0 && uiv.getVar('!BROWSER') !== 'firefox') {
-    // hover the match — CDP input, so Chrome/Edge only; the find above
-    // already proved the OCR search works in every browser
-    uiv.browser.move(hits[0]);
-  }
-} catch (e) {
-  uiv.log(\`OCR not available: \${e.message}\`, 'orange');
-}
-
-// Vision: uiv.findImage('button.png') -> first match; a visual click is
-// always explicit: uiv.browser.click(uiv.findImage('button.png'))
-// (create images with the AI chat or the Image button in Script tools)
-uiv.log('Done - add a uiv.img line with one of your own images', 'green');
-`
-  },
-  {
-    fileName: 'DemoFormFill.js',
-    title: 'Form filling, the fast way (JS)',
-    code: `// The same 10-iteration form fill as the table macro — and it should
-// finish in about the same time. That is what picking the right INPUT
-// TIER is for.
-//
-// uiv.page.type(locator, text) fills a field in ONE call: it is the
-// classic 'type' command, so it finds the field, focuses it and sets the
-// value in a single step. The alternative — focus it with a trusted
-// click, then send real keystrokes — is TWO calls plus a keystroke per
-// character, and you only need it on sites that reject synthetic input:
-//
-//   uiv.browser.click('id=ContactName');   // trusted focus
-//   uiv.browser.type('test1');             // real keys, one CDP event each
-//
-// Three or more calls of one tier in a row read better aliased:
-const p = uiv.page;
-
-uiv.open('https://ui.vision/contact');
-
-for (let i = 1; i <= 10; i++) {
-  const testValue = \`test\${i}\`;
-
-  p.type('id=ContactName', testValue);
-  p.type('id=Email', \`\${testValue}@example.com\`);
-
-  uiv.log(\`Iteration \${i}: \${testValue}\`, 'blue');
-}
-
-// prove it actually happened — a script that "ran without errors" has
-// not necessarily done anything
-const filled = uiv.$('id=Email').value;
-if (filled !== 'test10@example.com') {
-  throw new Error(\`Email field ended up as '\${filled}', expected test10@example.com\`);
-}
-uiv.log('All 10 iterations completed and verified', 'green');
 `
   },
   {
@@ -849,7 +714,7 @@ uiv.exportToDownloads('currencyconverterdata.csv');
 // arguments, so nothing leaks in either direction.
 //
 // Include it from another script with:
-//   // @include Demo and QA Test Scripts/JS/Core/Sub/Sub_DemoCsvRead_FillForm.js
+//   // @include Demo and QA Test Scripts/Core/Sub/Sub_DemoCsvRead_FillForm.js
 
 function fillFormFromRow (row, lineNumber) {
   uiv.log(\`Filling the form from CSV row \${lineNumber}: \${row.join(', ')}\`, 'green');
@@ -886,7 +751,7 @@ if (uiv.main) {
 // the bookkeeping variables disappear.
 //
 // The subroutine is a real function, spliced in before the script compiles:
-// @include Demo and QA Test Scripts/JS/Core/Sub/Sub_DemoCsvRead_FillForm.js
+// @include Demo and QA Test Scripts/Core/Sub/Sub_DemoCsvRead_FillForm.js
 
 uiv.setVar('!TIMEOUT_MACRO', 180);
 
@@ -1187,7 +1052,7 @@ uiv.log('DemoExecuteScript (JS) completed', 'green');
 uiv.setVar('!TIMEOUT_PAGELOAD', 60);
 uiv.open('https://docs.google.com/forms/d/1cbI5dMRs0-t_IwNzPm6T3lAG_nPgsnJZEA-FEYVARxg/');
 
-uiv.browser.click('xpath=//span[contains(text(),"Ui.Vision IDE")]');
+uiv.browser.click('xpath=//span[contains(text(),".Vision IDE")]');
 uiv.browser.click("xpath=//*[text()[contains(.,'Web Testing')]]");
 uiv.browser.click('xpath=//span[contains(text(),"Form Autofilling")]');
 uiv.browser.click('xpath=//*[text()[contains(.,"General Web Automation")]]');
@@ -1885,7 +1750,7 @@ uiv.log(\`Clear button pressed at X,Y: \${clearButton.x},\${clearButton.y}\`, 'g
 // rect, so the maths is one line each.
 //
 // Include it with:
-//   // @include Demo and QA Test Scripts/JS/XModules_Desktop/Sub/Sub_XDesktopAutomation_Area.js
+//   // @include Demo and QA Test Scripts/XModules_Desktop/Sub/Sub_XDesktopAutomation_Area.js
 
 function limitSearchToIdeWindow () {
   const DESKTOP = { scope: 'desktop', minScore: 0.4 };
@@ -1922,7 +1787,7 @@ if (uiv.main) {
 //
 // The search area comes from a shared function rather than a \`run\` of another
 // macro — the subroutine is spliced in before this compiles:
-// @include Demo and QA Test Scripts/JS/XModules_Desktop/Sub/Sub_XDesktopAutomation_Area.js
+// @include Demo and QA Test Scripts/XModules_Desktop/Sub/Sub_XDesktopAutomation_Area.js
 
 const x = uiv.desktop;
 const DESKTOP = { scope: 'desktop', minScore: 0.5 };
@@ -2386,75 +2251,6 @@ uiv.run('XClick', 'ocr=website');
 // assertElementPresent is just a finder call that throws
 uiv.$('xpath=//*[@id="logo"]/img');
 uiv.log('DemoPDFTest_with_OCR (JS) completed — landed on the website', 'green');
-`
-  },
-  {
-    fileName: 'TestAiLocate.js',
-    title: 'Test uiv.ai.find (JS)',
-    code: `// Smallest useful test of uiv.ai.find (the classic aiScreenXY).
-//
-// It asks the model to find something whose REAL position the DOM already
-// knows, then compares the two. That is the only way to tell the three failure
-// modes apart without squinting at the screen:
-//
-//   right spot            -> the provider path works
-//   consistently offset   -> the image was scaled and the factor was not
-//                            divided back out
-//   somewhere arbitrary   -> the model is bad at spatial grounding; not a
-//                            plumbing problem
-//
-// Wikipedia's search box is a good target: large, unambiguous, and it has a
-// stable id so the DOM answer is exact.
-uiv.open('https://www.wikipedia.org');
-
-// The page's OWN viewport, for comparison with the "aiScreenXY frame" line.
-// It has to come from the page: window.innerWidth inside the extension is the
-// side panel's window, which is a different thing entirely.
-const view = uiv.eval('return innerWidth + "x" + innerHeight');
-uiv.log(\`page viewport \${view} — the screenshot should match this\`, 'blue');
-
-const truth = uiv.$('css=#searchInput');
-uiv.log(\`DOM says the search box centre is at \${truth.x}, \${truth.y}\`, 'blue');
-
-const guess = uiv.ai.find('the search input box in the middle of the page');
-uiv.log(\`The model says \${guess.x}, \${guess.y}\`, 'blue');
-
-const dx = guess.x - truth.x;
-const dy = guess.y - truth.y;
-const distance = Math.round(Math.sqrt(dx * dx + dy * dy));
-
-uiv.log(\`Off by \${dx}, \${dy} — \${distance}px away\`, 'brown');
-
-// Is the guess inside the element the DOM found? That is the only test that
-// matters: a click at the guess must land on the box.
-const r = truth.rect;
-const inside =
-  guess.x >= r.left && guess.x <= r.left + r.width &&
-  guess.y >= r.top && guess.y <= r.top + r.height;
-
-// Stop HERE when the point is wrong. Clicking anyway lands on the page
-// background, and the run then fails on "no input field is focused" — which
-// describes the consequence and hides the cause.
-if (!inside) {
-  throw new Error(
-    \`uiv.ai.find missed: \${distance}px away (off by \${dx}, \${dy}), outside the box \` +
-    \`(\${r.left},\${r.top} \${r.width}x\${r.height}). Check the "aiScreenXY frame" line in the log: \` +
-    \`if the screenshot size differs from the viewport size the coordinates are being transformed \` +
-    \`wrongly, and no model can fix that; if they match, it is the model's aim.\`
-  );
-}
-
-uiv.log('PASS — the coordinates land inside the search box', 'green');
-
-// prove it end to end: click where the model pointed and type there
-uiv.page.click(guess);
-uiv.browser.type('located by AI');
-
-const typed = uiv.$('css=#searchInput').value;
-if (typed.indexOf('located by AI') === -1) {
-  throw new Error(\`the click did not land in the search box — the field contains "\${typed}"\`);
-}
-uiv.log('Typed into the box the model pointed at — uiv.ai.find works end to end', 'green');
 `
   }
 ]

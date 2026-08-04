@@ -1,6 +1,6 @@
 import * as act from '@/actions'
 import * as C from '@/common/constant'
-import { Player } from '@/common/player'
+import { getPlayer, Player } from '@/common/player'
 import { compose, isWindows } from '@/common/ts_utils'
 import { store } from '@/redux'
 import { NO_ANTHROPIC_API_KEY_ERROR } from '../anthropic'
@@ -98,9 +98,23 @@ const uivError = (error: any, providerLabel = 'Anthropic') => {
   return new Error(`E352: ${providerLabel} API returned error: ${error.message}`)
 }
 
+// The play run an agent loop belongs to. `playUID` is a fresh random per
+// player.play(), so it identifies the aiComputerUse command that started this
+// loop — see common/player.js.
+const currentPlayUID = (): number | null => {
+  try {
+    return getPlayer().getState().playUID
+  } catch (e) {
+    return null
+  }
+}
+
 export class ComputerUseService {
   private _logMessage: (message: string, userOrAi?: ComputerUseMessageType, isActionOrResult?: 'action' | 'result') => void
   private currentLoop = 0
+  // Captured at construction, i.e. inside the play() that runs the
+  // aiComputerUse command this loop serves.
+  private playUID: number | null = currentPlayUID()
   private _getTerminationRequest: (loopCompletedCount: number) => 'max_loop_reached' | 'player_stopped' | 'stop_requested' | undefined
   private messages: ClaudeSamplingMessage[] = []
   private sampling: ISamplingEngine
@@ -334,6 +348,20 @@ export class ComputerUseService {
     const maxLoop = parseInt(state.config.aiComputerUseMaxLoops)
     if (loopCompletedCount >= maxLoop) {
       return 'max_loop_reached'
+    }
+
+    // "Is the player stopped?" cannot tell "my run ended" from "somebody
+    // else's run is going on right now". The loop lives across many awaits (an
+    // API call plus a browser action per iteration), so when the script that
+    // started it was stopped, the very next macro's play() put the player back
+    // into PLAYING — and this loop read that as "carry on", then kept firing
+    // clicks, keystrokes and screenshots into the play tab WHILE the next macro
+    // was opening its page. That collision is what surfaced there as #102.
+    //
+    // The playUID is per play() call, so a changed one means this loop has
+    // outlived its own command, whatever the player is busy with now.
+    if (this.playUID !== null && currentPlayUID() !== this.playUID) {
+      return 'player_stopped'
     }
 
     if (state.player.status === Player.C.STATUS.STOPPED) {

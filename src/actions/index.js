@@ -14,6 +14,7 @@ import { fromJSONString } from '../common/convert_utils'
 import config from '../config'
 import { CLASSIC_PREINSTALL, JS_PREINSTALL } from '../config/preinstall_macros'
 import { WELCOME_SCRIPT, STAR_SCRIPT, CAT_SCRIPT } from '../config/preinstall_js_scripts'
+import Ext from '../common/web_extension'
 import { getMacroExtraKeyValueData } from '../services/kv_data/macro_extra_data'
 import { getBreakpoints, getBreakpointsByMacroId, getCurrentMacroId, getErrorCommandIndices, getWarningCommandIndices, getMacrosExtra, getMacroFileNodeList, hasUnsavedMacro } from '../recomputed'
 import { prompt } from '../components/prompt'
@@ -1468,14 +1469,15 @@ function installPreinstallVisionImages (dispatch) {
   })
 }
 
-// The three macros a FRESH INSTALL starts with: the welcome tour, the
-// GitHub star macro and the cat drawing demo, at the tree root where they
-// cannot be missed. Everything
-// else (the full demo/QA sets) stays out of a new install and arrives via
-// restoreDemoMacros below.
+// The macros a FRESH INSTALL puts at the tree root, where they cannot
+// be missed: the welcome tour, the GitHub star macro and (Chrome/Edge only)
+// the cat drawing demo. The install also writes the full JS demo set
+// (restoreDemoMacros below, dispatched by tryPreinstall in src/index.js) —
+// but that folder starts collapsed, so these root macros are what a new
+// user actually sees.
 export function installWelcomeMacro () {
   return () => {
-    return writePreinstallMacroSet({
+    const macros = {
       'A short welcome tour.js': {
         CreationDate: '2026-07-29',
         Commands: [],
@@ -1488,22 +1490,29 @@ export function installWelcomeMacro () {
         CreationDate: '2026-07-29',
         Commands: [],
         Script: STAR_SCRIPT
-      },
-      'Draw a cat🐱.js': {
+      }
+    }
+    // The cat demo draws with trusted CDP input (uiv.browser.*), which only
+    // Chrome/Edge have — on Firefox the script can only show its "needs
+    // Chrome or Edge" banner and exit, so Firefox installs don't get it
+    if (!Ext.isFirefox()) {
+      macros['Draw a cat🐱.js'] = {
         CreationDate: '2026-07-30',
         Commands: [],
         Script: CAT_SCRIPT
       }
-    })
+    }
+    return writePreinstallMacroSet(macros)
   }
 }
 
-// Settings > General, "For Tech Support/QA": write ONE demo set in its
-// shipped state — deleted demos come back, edited ones are overwritten,
-// the user's own macros are untouched. Demos are NOT auto-installed on
-// install/update anymore, so these buttons are the only road the demo
-// macros AND their csv/vision resources arrive by — hence both are
-// (re)installed here.
+// Write ONE demo set in its shipped state — deleted demos come back, edited
+// ones are overwritten, the user's own macros are untouched. The csv/vision
+// resources the demos use are (re)installed along with the macros. The 'js'
+// set goes to "Demo and QA Test Scripts" (also written on fresh install, see
+// tryPreinstall in src/index.js); the 'classic' set goes to "Demo and QA
+// Test Scripts (Classic)" and ONLY arrives via its Settings > General >
+// "For Tech Support/QA" restore button.
 export function restoreDemoMacros (kind /* 'js' | 'classic' */) {
   return (dispatch) => {
     log('PREINSTALL_CSV_LIST', PREINSTALL_CSV_LIST)

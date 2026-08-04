@@ -1,14 +1,16 @@
 // Marks the tab(s) Ui.Vision is currently automating (same pattern as
 // Claude for Chrome):
-//  - the tab is put into a labeled tab group in the tab strip
-//    ("Ui.Vision" — orange while recording, blue while replaying)
 //  - a thin glowing border is drawn around the page content
 //    (kept small/subtle so it does not disturb replay or screenshots)
+//  - [disabled, see USE_TAB_GROUPS] the tab is put into a labeled tab group
+//    in the tab strip ("Ui.Vision" — orange while recording, blue while
+//    replaying)
 //
 // Chrome only: tab groups + chrome.scripting are not available in Firefox,
 // every entry point degrades to a no-op there.
 
 import log from '../common/log'
+import storage from '../common/storage'
 
 const COLORS = {
   // group colors must be one of Chrome's 9 preset tab group colors
@@ -16,10 +18,12 @@ const COLORS = {
   playing: { group: 'blue', border: '#1a6ce0' },
   // ai = the sidebar AI agent is working on this tab — orange to match the
   // AI chat's action text color (.sender-action in ai-chat.scss)
-  ai: { group: 'orange', border: '#ffa500' },
-  // idle = not recording/replaying, side panel open: marks the tab that the
-  // next record/replay would target (i.e. the currently active tab)
-  idle: { group: 'green', border: '#16a34a' }
+  ai: { group: 'orange', border: '#ffa500' }
+  // There was a green 'idle' mark here too: while the side panel was open and
+  // nothing ran, it framed the tab the next run WOULD target. Removed in
+  // 10.0.34 — a border on a page Ui.Vision is not touching is a permanent
+  // decoration on the user's browsing, and it injects into every tab the user
+  // visits just for that. Marks now exist only while something is running.
 }
 
 const GROUP_TITLE = 'Ui.Vision'
@@ -28,11 +32,20 @@ const GROUP_TITLE = 'Ui.Vision'
 // queries both spellings while new groups get the current one.
 const GROUP_TITLES_TO_SWEEP = [GROUP_TITLE, 'UI.Vision']
 
-// Tab groups were briefly suspected of shuffling tab indices during the JS
-// script prototype's per-command runs — testing exonerated them (the real
-// issue was active-tab re-resolution in the script runner). Visual marking
-// via groups is back on.
-const USE_TAB_GROUPS = true
+// Off since 10.0.33, and the "tabGroups" manifest permission is gone with it.
+// The permission carries the "View and manage your tab groups" warning, and a
+// new warning-carrying permission in an update puts every existing install into
+// Chrome's "Action required — accept the new permissions" state until the user
+// clicks Accept. That is far too much friction for a purely cosmetic mark: the
+// group is never read back by the player or by tab resolution, so nothing but
+// the tab strip's appearance changes. The glow border below carries the whole
+// feature now (it needs only "scripting", which we already have).
+//
+// If this ever comes back, make it an optional_permission requested from a user
+// gesture — optional permissions do not trigger the disable-on-update prompt,
+// and supportsTabGroups() below is already the right guard (Chrome leaves the
+// chrome.tabGroups namespace undefined until the permission is granted).
+const USE_TAB_GROUPS = false
 
 // The border is a DOM overlay element with a fixed id (not insertCSS): the
 // navigation listener can fire more than once per page, and stacked insertCSS
@@ -67,9 +80,27 @@ const injectedHideBorder = (id) => {
 }
 
 const current = {
-  mode: null, // 'recording' | 'playing' | null
+  mode: null, // 'recording' | 'playing' | 'ai' | null
   groupId: null,
-  tabIds: new Set()
+  tabIds: new Set(),
+  // true while a 'playing' mark runs with "Replay animations" OFF: the
+  // mode/tabIds bookkeeping is kept (so unmark still works) but nothing is
+  // drawn — the setting's promise is "no decoration during replay", and that
+  // includes the blue border
+  visualsSuppressed: false
+}
+
+// "Replay animations" (config.playHighlightElements, default ON) also governs
+// the replay border. Only the 'playing' mark checks it: recording and the AI
+// mark are not replay decoration — the AI border in particular is the user's
+// only sign of which tab the agent is driving.
+const replayBorderEnabled = async () => {
+  try {
+    const config = (await storage.get('config')) || {}
+    return config.playHighlightElements !== false // missing key = default ON
+  } catch (e) {
+    return true
+  }
 }
 
 const supportsTabGroups = () => {
@@ -119,6 +150,14 @@ export const markAutomationTab = async (tabId, mode) => {
   if (current.tabIds.has(tabId)) return
   current.tabIds.add(tabId)
 
+  // replay with highlighting off: keep the state, skip every visual (border
+  // now, group below, and re-inserts via visualsSuppressed in onUpdated)
+  if (mode === 'playing' && !(await replayBorderEnabled())) {
+    current.visualsSuppressed = true
+    return
+  }
+  current.visualsSuppressed = false
+
   insertBorder(tabId, mode)
 
   if (!USE_TAB_GROUPS || !supportsTabGroups()) return
@@ -138,41 +177,20 @@ export const markAutomationTab = async (tabId, mode) => {
   }
 }
 
-// Mark the currently active tab while the extension is idle (green).
-// Unlike recording/replay, the idle mark is single-tab: it follows the user
-// as they switch tabs, so the previous tab is unmarked first.
-// Never touches an active recording/replay mark.
-export const markIdleTab = async (tabId) => {
-  if (!tabId) return
-  if (current.mode === 'recording' || current.mode === 'playing' || current.mode === 'ai') return
-  if (current.mode === 'idle' && current.tabIds.has(tabId)) return
-
-  await unmarkAutomationTabs()
-  return markAutomationTab(tabId, 'idle')
-}
-
-// Remove the idle mark only (e.g. side panel closed). A recording/replay
-// mark is left untouched. `current` cannot be trusted here: the MV3 service
-// worker may have restarted since the mark was set (mode is then null), so
-// instead of requiring mode === 'idle' we sweep by group color — green is
-// only ever used for the idle mark.
-export const unmarkIdleTab = () => {
-  if (current.mode === 'recording' || current.mode === 'playing' || current.mode === 'ai') return Promise.resolve()
-  return unmarkAutomationTabs({ colors: ['green'] })
-}
-
 // Remove border + dissolve the group for all marked tabs.
 // Deliberately stateless where possible: the MV3 service worker can restart
 // mid-replay and lose `current`, so we also find marked tabs through the
 // "Ui.Vision" tab group itself and strip both border color variants.
-// opts.colors limits the group sweep to those colors (used by unmarkIdleTab
-// to dissolve green idle groups without touching an orange/blue run group).
+// opts.colors limits the group sweep to those colors — unused since the green
+// idle mark went away, kept because the group sweep is the only handle on
+// marks a restarted worker no longer remembers.
 export const unmarkAutomationTabs = async (opts = {}) => {
   const candidates = new Set(current.tabIds)
 
   current.mode = null
   current.groupId = null
   current.tabIds = new Set()
+  current.visualsSuppressed = false
 
   if (supportsTabGroups()) {
     try {
@@ -207,6 +225,7 @@ export const bindAutomationTabMarkEvents = () => {
 
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     if (!current.mode || !current.tabIds.has(tabId)) return
+    if (current.visualsSuppressed) return // replay marks run invisible then
     if (changeInfo.status === 'loading' || changeInfo.status === 'complete') {
       insertBorder(tabId, current.mode)
     }

@@ -29,31 +29,47 @@ the extension and executed there.
 
 ## Setup
 
-1. **Register with Claude Code** (npm fetches the bridge automatically):
+1. **Run the installer** once in a terminal (npm fetches the bridge
+   automatically):
 
    ```bash
-   claude mcp add uivision -- npx -y uivision-mcp-bridge
+   npx uivision-mcp-bridge --setup
+   ```
+
+   It writes the `uivision` server entry into every MCP client it finds on the
+   machine — Claude Code (`~/.claude.json`), Claude Desktop, Cursor, Windsurf
+   and VS Code — and then prints the pairing token for step 2. Existing config
+   is merged, not replaced, and a `.uivision-backup` copy is written first. A
+   config file that is not valid JSON is reported and left untouched.
+
+   `--setup` exists because `claude mcp add ...` needs the `claude` CLI on
+   PATH, and it is not there in the desktop app, the VS Code extension, Cursor
+   or Windsurf. For a client the installer does not know, add this by hand
+   (VS Code nests it under `"servers"` instead of `"mcpServers"`):
+
+   ```json
+   { "mcpServers": { "uivision": { "command": "npx", "args": ["-y", "uivision-mcp-bridge"] } } }
    ```
 
    Working from a checkout of this repo instead: `cd mcp && npm install`, then
-   `claude mcp add uivision -- node /absolute/path/to/mcp/uivision-mcp-bridge.js`.
+   register `node /absolute/path/to/mcp/uivision-mcp-bridge.js`.
 
-   MCP clients load their servers at **startup** — if a Claude Code session is
-   already open, restart it (or start a new one) after registering, then check
-   with `/mcp` that `uivision` is listed.
+   MCP clients load their servers at **startup** — after registering, quit the
+   client completely and reopen it (a new session or tab is not enough), then
+   check with `/mcp` that `uivision` is listed. If the client was running while
+   `--setup` wrote its config, quit it and run `--setup` once more: some clients
+   rewrite their config on exit and would drop the entry.
 
-2. **Get the auth token**: start the bridge once (or just run Claude Code — it
-   starts it for you). On first run it generates a token file
-   `~/.uivision_mcp_token` in your home directory and prints the value to
-   stderr. Copy it — or simply ask the AI for it: when the extension is not
-   paired yet, the bridge tells the agent to read the token file and show you
-   the value in chat.
+2. **Paste the token into Ui.Vision**: open the Ui.Vision side panel →
+   Settings → AI → *MCP bridge (Claude Code)* → enable it, paste the token from
+   step 1, keep the default port (50888) unless you changed it, click *Test*.
 
-3. **Enable the bridge in Ui.Vision**: open the Ui.Vision side panel →
-   Settings → AI → *MCP bridge (Claude Code)* → enable it, paste the token,
-   keep the default port (50888) unless you changed it.
+   Lost the token? It is in `~/.uivision_mcp_token`; `--setup` prints it again;
+   or just ask the AI — while the extension is unpaired every bridge tool result
+   carries the token value, so the agent can show it to you in chat without
+   reading any file.
 
-4. **Keep the side panel open** — the tools execute in the side panel context.
+3. **Keep the side panel open** — the tools execute in the side panel context.
    If it is closed, tool calls return "extension not connected".
 
 Then just chat in Claude Code: *"Use Ui.Vision to build a macro that logs into
@@ -64,6 +80,7 @@ reads the log, and iterates. You can watch it work live in the side panel.
 
 | Option | Default | Notes |
 |---|---|---|
+| `--setup` | — | One-shot installer: registers the bridge with every MCP client on the machine, prints the pairing token, exits. Never starts a server. Combine with `--port` to register a non-default port. |
 | `--port <n>` / `UIVISION_MCP_PORT` | `50888` | WebSocket port (127.0.0.1 only). Must match the port in Ui.Vision settings. |
 | `--token <t>` / `UIVISION_MCP_TOKEN` | auto-generated | Shared secret; auto-persisted to `.uivision_mcp_token` in the user's home directory when not passed. |
 
@@ -91,8 +108,11 @@ remain Chrome-only; on Firefox use `uiv.page.*` / `uiv.desktop.*`.
 
 ## Troubleshooting
 
+- **No `uivision` tools in the session at all**: the client was not restarted
+  after `--setup`, or was running while `--setup` wrote its config. Quit it
+  completely, re-run `--setup`, reopen.
 - Ask Claude to call the `bridge_status` tool — it reports whether the
-  extension is connected.
+  extension is connected, and while unpaired it returns the pairing token.
 - Bridge logs go to stderr (visible via `claude --debug` or in Claude Code's
   MCP logs).
 - "Port in use": another bridge instance is running, or pick a different

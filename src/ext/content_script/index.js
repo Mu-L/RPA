@@ -129,8 +129,28 @@ const getMask = (function () {
 
     factory = inspector.maskFactory()
 
-    const maskClick   = factory.gen({ background: 'green', border: '2px solid purple' })
-    const maskHover   = factory.gen({ background: '#ffa800', border: '2px solid purple' })
+    // Brand blue for the acted-on element, amber for hover — the old flat
+    // green box with a purple border sat at 50% opacity, which muddied both
+    // the fill AND the border. A translucent fill with a FULLY opaque border
+    // reads as a crisp outline instead of a wash, and lets the element itself
+    // stay legible underneath. zIndex 999 lost against any modern overlay;
+    // these sit just below the automation border's 2147483647.
+    const maskClick = factory.gen({
+      background: 'rgba(26, 108, 224, 0.16)',
+      border: '2px solid #1a6ce0',
+      borderRadius: '4px',
+      boxShadow: '0 0 0 3px rgba(26, 108, 224, 0.14), 0 2px 12px rgba(26, 108, 224, 0.30)',
+      opacity: 1,
+      zIndex: '2147483000'
+    })
+    const maskHover = factory.gen({
+      background: 'rgba(255, 149, 0, 0.16)',
+      border: '2px solid #ff9500',
+      borderRadius: '4px',
+      boxShadow: '0 0 0 3px rgba(255, 149, 0, 0.14)',
+      opacity: 1,
+      zIndex: '2147483000'
+    })
 
     addLogoImg(maskClick)
     addLogoImg(maskHover)
@@ -255,14 +275,50 @@ const isValidType = (el) => {
   return false
 }
 
+// The replay highlight (uiv.page.click/type, the classic click/type commands).
+// The mask used to just appear and vanish; it now pops in and fades out.
+//
+// COSTS NOTHING IN REPLAY TIME, by construction: element.animate() is
+// fire-and-forget and animates only opacity/transform, which the compositor
+// handles off the main thread — no layout, no paint, and nothing awaited. The
+// caller dispatches its click on the very next line, exactly as before; the
+// animation simply plays over it.
+let maskAnim = null
+
 const highlightDom = ($dom, timeout) => {
   const mask = getMask()
+  const ms = timeout || MASK_CLICK_FADE_TIMEOUT
 
   inspector.showMaskOver(mask.maskClick, $dom)
 
+  // A finished fill:forwards animation would keep the mask at its faded-out
+  // opacity, so the NEXT highlight would draw nothing — cancel first, which
+  // also restarts the pop cleanly when two commands hit the same element.
+  if (maskAnim) {
+    try { maskAnim.cancel() } catch (e) { /* already gone */ }
+    maskAnim = null
+  }
+
+  if (typeof mask.maskClick.animate === 'function') {
+    try {
+      maskAnim = mask.maskClick.animate([
+        { opacity: 0, transform: 'scale(1.06)' },
+        { opacity: 1, transform: 'scale(1)', offset: 0.18 },
+        { opacity: 1, transform: 'scale(1)', offset: 0.72 },
+        { opacity: 0, transform: 'scale(1.02)' }
+      ], {
+        duration: ms,
+        easing: 'cubic-bezier(0.2, 0, 0.2, 1)',
+        // hold the faded-out frame until the timer below hides the element,
+        // otherwise it snaps back to full opacity for a frame and flickers
+        fill: 'forwards'
+      })
+    } catch (e) { /* no Web Animations here — the mask still shows, unanimated */ }
+  }
+
   setTimeout(() => {
     inspector.setStyle(mask.maskClick, { display: 'none' })
-  }, timeout || MASK_CLICK_FADE_TIMEOUT)
+  }, ms)
 }
 
 

@@ -75,25 +75,35 @@ export const DEPRECATED_VARIABLES = [
       'On a page that cannot run scripts (chrome://, the PDF viewer, an error page) use uiv.tabs.list() — every entry carries its url.'
   },
   {
-    name: '!CURRENT_TAB_NUMBER_RELATIVE',
-    note: 'deprecated — table macros only; in JS compute it from !CURRENT_TAB_NUMBER',
+    name: '!CURRENT_TAB_NUMBER',
+    note: 'table macros only; in JS every uiv.tabs.* call returns the position, and uiv.tabs.list() marks the script tab with current: true',
     jsError:
-      "'!CURRENT_TAB_NUMBER_RELATIVE' is deprecated and cannot work in a JS script: every uiv call is its own macro run and re-baselines it, so any value read here is meaningless. " +
-      "Compute it instead — capture the start index once and subtract: var startTab = uiv.getVar('!CURRENT_TAB_NUMBER'); … uiv.getVar('!CURRENT_TAB_NUMBER') - startTab"
+      "'!CURRENT_TAB_NUMBER' is a table-macro variable and cannot be trusted in a JS script: only classic-player commands refresh it, " +
+      'so next to uiv.tabs.select/open/close it silently holds the OLD position. The tabs API returns the position directly: ' +
+      'every uiv.tabs.* call returns {index, title, url, active, current}, and uiv.tabs.list() marks the tab your commands act on with current: true — ' +
+      'var tab = uiv.tabs.list().find(function (t) { return t.current; }). Indexes are 1-based left to right, what the tab bar shows (this variable was 0-based).'
+  },
+  {
+    name: '!CURRENT_TAB_NUMBER_RELATIVE',
+    note: 'deprecated — table macros only; in JS compute it from uiv.tabs.list()',
+    jsError:
+      "'!CURRENT_TAB_NUMBER_RELATIVE' is deprecated and cannot work in a JS script: every classic-bridge uiv call is its own macro run and re-baselines it, so any value read here is meaningless. " +
+      'Compute it instead — capture the start position once and subtract: ' +
+      'var tabIndex = function () { return uiv.tabs.list().find(function (t) { return t.current; }).index; }; var startTab = tabIndex(); … tabIndex() - startTab'
   },
   {
     name: '!CURRENT_TAB_NUMBER_RELATIVE_INDEX',
     note: 'deprecated — internal player bookkeeping for the relative tab baseline',
     jsError:
       "'!CURRENT_TAB_NUMBER_RELATIVE_INDEX' is deprecated internal player bookkeeping and is re-set before every uiv call. " +
-      "Use uiv.getVar('!CURRENT_TAB_NUMBER') for the current tab index."
+      'uiv.tabs.list() shows the live positions — the entry with current: true is the tab your commands act on.'
   },
   {
     name: '!CURRENT_TAB_NUMBER_RELATIVE_ID',
     note: 'deprecated — internal player bookkeeping for the relative tab baseline',
     jsError:
       "'!CURRENT_TAB_NUMBER_RELATIVE_ID' is deprecated internal player bookkeeping and is re-set before every uiv call. " +
-      "Use uiv.getVar('!CURRENT_TAB_NUMBER') for the current tab index."
+      'uiv.tabs.list() shows the live positions — the entry with current: true is the tab your commands act on.'
   }
 ]
 

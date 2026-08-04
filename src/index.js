@@ -55,6 +55,7 @@ import {
   updateUI,
   resetEditingIfNeeded,
   installWelcomeMacro,
+  restoreDemoMacros,
   setMacrosExtra,
   findSameNameMacro,
   renameVisionImage,
@@ -257,6 +258,14 @@ const restoreConfig = () => {
       const isExistingInstall = !!(config && Object.keys(config).length > 0)
 
       const cfg = {
+        // "This config was created by a first run, not restored" — read by
+        // bg.js initUpgradeDetectionByVersion to tell a just-born config from
+        // a genuine pre-existing profile. Needed because on Firefox the
+        // sidebar auto-opens at install (open_at_install) and this very write
+        // RACES the background's fresh-install check, which used to misread
+        // the brand-new profile as an upgrade and skip the welcome page.
+        // ...config merges last, so a stored value always wins.
+        configBornFresh: !isExistingInstall,
         // Note: side panel is the default entry point for new installs (sidebar-first UI).
         // Existing installs keep whatever value is already stored in config.
         showSidePanel: true,
@@ -1152,15 +1161,16 @@ const updatePageTitle = (args) => {
   document.title = `${origTitle} - (Tab: ${args.title})`
 }
 
-// The demo/QA macro sets are NOT auto-installed anymore: a fresh install
-// starts with just THREE macros — the welcome tour "A short welcome tour.js",
-// "Like Ui.Vision？Give us a star 🌟.js" and "Draw a cat🐱.js", all at the
-// tree root. The full sets
-// arrive on demand via Settings > General >
-// "For Tech Support/QA" > Restore Demo Macros (those buttons also install
-// the demo csv/vision resources). The version marker is still written, so
-// installs that predate this keep their upgrade history consistent and the
-// welcome macro is written only once, not on every startup.
+// A fresh install starts with THREE macros at the tree root — the welcome
+// tour "A short welcome tour.js", "Like Ui.Vision？Give us a star 🌟.js" and
+// "Draw a cat🐱.js" — plus the full JS demo set in the "Demo and QA Test
+// Scripts" folder (with its csv/vision resources). The folder starts
+// collapsed (see getFolded in recomputed/index.ts), so the root macros stay
+// in view. The CLASSIC demo set is never auto-installed; it arrives only via
+// Settings > General > "For Tech Support/QA" > Restore Demo Macros (Classic),
+// into "Demo and QA Test Scripts (Classic)". The version marker is still
+// written, so installs that predate this keep their upgrade history
+// consistent and the sets are written only once, not on every startup.
 function tryPreinstall () {
   return storage.get('preinstall_info')
   .then(info => {
@@ -1169,7 +1179,9 @@ function tryPreinstall () {
     if (askedVersions.indexOf(thisVersion) !== -1) return false
 
     const installOnFresh = !info
-      ? store.dispatch(installWelcomeMacro()).catch(e => log.warn(`welcome macro install failed: ${e && e.message}`))
+      ? store.dispatch(installWelcomeMacro())
+        .then(() => store.dispatch(restoreDemoMacros('js')))
+        .catch(e => log.warn(`demo macro install failed: ${e && e.message}`))
       : Promise.resolve()
 
     return installOnFresh.then(() => storage.set('preinstall_info', {

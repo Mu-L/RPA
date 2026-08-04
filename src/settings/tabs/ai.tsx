@@ -17,11 +17,26 @@ import { getInstallId, mapUIVisionFreeTierError } from '@/services/ai/uivision_f
 import { testMcpBridge } from '@/services/mcp_bridge'
 import { normalizeApiKey } from '@/services/ai/computer_use/service'
 
-// One-line Claude Code registration for the MCP bridge (shown with a Copy
-// button in the bridge settings). Uses the published npm package so end users
-// never need the repo; developers can point at mcp/uivision-mcp-bridge.js
-// directly instead (see mcp/README.md).
-const MCP_BRIDGE_SETUP_CMD = 'claude mcp add uivision -- npx -y uivision-mcp-bridge'
+// One-line installer for the MCP bridge (shown with a Copy button in the
+// bridge settings). `--setup` writes the server entry into every MCP client
+// installed on the machine and prints the pairing token.
+//
+// It replaces the old `claude mcp add uivision -- ...` one-liner, which only
+// worked when the `claude` CLI was on PATH — it is not in the desktop app, the
+// VS Code extension, Cursor or Windsurf, and that was the single biggest
+// reason first-time setup failed.
+//
+// Uses the published npm package so end users never need the repo; developers
+// can point at mcp/uivision-mcp-bridge.js directly (see mcp/README.md).
+const MCP_BRIDGE_SETUP_CMD = 'npx uivision-mcp-bridge --setup'
+
+// Manual fallback for MCP clients the installer does not know about: the raw
+// server entry to paste into whatever config file that client uses.
+const MCP_BRIDGE_SETUP_JSON = JSON.stringify(
+  { mcpServers: { uivision: { command: 'npx', args: ['-y', 'uivision-mcp-bridge'] } } },
+  null,
+  2
+)
 
 const OPENROUTER_BASE_URL = OPENAI_COMPAT.OPENROUTER_BASE_URL
 const DEFAULT_OPENROUTER_MODEL = OPENAI_COMPAT.DEFAULT_OPENROUTER_MODEL
@@ -32,6 +47,7 @@ const UIVISION_BASE_URL = OPENAI_COMPAT.UIVISION_BASE_URL
 // of recommendations as Midscene/Nanobrowser). Users can type any model id.
 const OPENROUTER_MODEL_OPTIONS = [
   { value: 'anthropic/claude-sonnet-5', label: 'anthropic/claude-sonnet-5 — recommended: best results' },
+  { value: 'openai/gpt-5.6-luna', label: 'openai/gpt-5.6-luna — low cost, good results' },
   { value: 'qwen/qwen3.7-plus', label: 'qwen/qwen3.7-plus — low cost, slower on visual tasks' }
 ]
 
@@ -219,7 +235,7 @@ class AITab extends React.Component<AiTabProps, AiTabAppState> {
         <div className="row" style={{ marginBottom: '20px' }}>
           The AI commands feature is currently experimental/beta. The built-in Ui.Vision AI works without an API key; for the
           other providers, enter their API key{' '}
-          <a href="https://go.ui.vision/?help=ai" target="_blank">
+          <a href="https://go.ui.vision/?help=aiprovider" target="_blank">
             (more information)
           </a>
           :
@@ -372,14 +388,65 @@ class AITab extends React.Component<AiTabProps, AiTabAppState> {
             checked={!!this.props.config.mcpBridgeEnabled}
             onChange={(checked: boolean) => onConfigChange('mcpBridgeEnabled', checked)}
           />
+          <a href="https://go.ui.vision/?help=mcp" target="_blank" style={{ marginLeft: '10px' }}>
+            (more info)
+          </a>
         </div>
         {this.props.config.mcpBridgeEnabled ? (
           <>
             <div className="row" style={{ marginBottom: '10px', fontSize: '12px' }}>
-              Lets Claude Code (or any MCP client) build and run macros in this browser. Requires the local bridge
-              process from the Ui.Vision <code>mcp/</code> folder (see its README). The side panel connects to it on
-              127.0.0.1 and must stay open while Claude works. Paste the token from the bridge&apos;s{' '}
-              <code>.uivision_mcp_token</code> file below.
+              Lets Claude Code (or any MCP client) build and run macros in this browser. The side panel connects to a
+              small local bridge process on 127.0.0.1 and must stay open while the AI works.
+            </div>
+            <div className="ai-settings-item">
+              <span className="label-text">1. Run this once:</span>
+              <Input readOnly value={MCP_BRIDGE_SETUP_CMD} style={{ fontFamily: 'monospace', fontSize: '12px' }} />
+              <Button
+                onClick={() => {
+                  navigator.clipboard
+                    .writeText(MCP_BRIDGE_SETUP_CMD)
+                    .then(() => message.success('Command copied — run it in a terminal, then quit and reopen Claude Code'))
+                    .catch(() => message.error('Could not copy — select the text and copy manually'))
+                }}
+              >
+                Copy
+              </Button>
+            </div>
+            <div className="row" style={{ marginBottom: '10px', fontSize: '12px' }}>
+              Paste it into a terminal. It registers Ui.Vision with every MCP client on this machine (Claude Code,
+              Claude Desktop, Cursor, Windsurf, VS Code) and prints the pairing token for step 2.{' '}
+              <strong>Then quit and reopen Claude Code</strong> — or whichever of those apps you use. MCP servers are
+              loaded only at startup, so an app that was already running will not see Ui.Vision, and opening a new chat
+              or tab is not enough.
+              <Button
+                type="link"
+                style={{ padding: '0 4px', fontSize: '12px', height: 'auto' }}
+                onClick={() => {
+                  navigator.clipboard
+                    .writeText(MCP_BRIDGE_SETUP_JSON)
+                    .then(() => message.success('JSON copied — add it to your MCP client’s config file'))
+                    .catch(() => message.error('Could not copy — see ui.vision/ai/mcp-bridge'))
+                }}
+              >
+                Copy the JSON config instead
+              </Button>
+              for any other MCP client.
+            </div>
+            <div className="ai-settings-item">
+              <span className="label-text">2. Bridge token:</span>
+              <Input
+                type="password"
+                placeholder="The token printed by the setup command"
+                value={this.props.config.mcpBridgeToken || ''}
+                onChange={(e) => onConfigChange('mcpBridgeToken', e.target.value)}
+              />
+              <Button loading={this.state.testingBridge} onClick={this.testBridge}>
+                Test
+              </Button>
+            </div>
+            <div className="row" style={{ marginBottom: '10px', fontSize: '12px' }}>
+              Lost it? The same token is in the <code>.uivision_mcp_token</code> file in your home folder, or just ask
+              the AI &mdash; it can read the token off the bridge and show it to you.
             </div>
             <div className="ai-settings-item">
               <span className="label-text">Bridge port:</span>
@@ -390,36 +457,6 @@ class AITab extends React.Component<AiTabProps, AiTabAppState> {
                 value={this.props.config.mcpBridgePort || ''}
                 onChange={(e) => onConfigChange('mcpBridgePort', e.target.value)}
               />
-            </div>
-            <div className="ai-settings-item">
-              <span className="label-text">Bridge token:</span>
-              <Input
-                type="password"
-                placeholder="Contents of the bridge's .uivision_mcp_token file"
-                value={this.props.config.mcpBridgeToken || ''}
-                onChange={(e) => onConfigChange('mcpBridgeToken', e.target.value)}
-              />
-              <Button loading={this.state.testingBridge} onClick={this.testBridge}>
-                Test
-              </Button>
-            </div>
-            <div className="ai-settings-item">
-              <span className="label-text">Claude Code setup:</span>
-              <Input readOnly value={MCP_BRIDGE_SETUP_CMD} style={{ fontFamily: 'monospace', fontSize: '12px' }} />
-              <Button
-                onClick={() => {
-                  navigator.clipboard
-                    .writeText(MCP_BRIDGE_SETUP_CMD)
-                    .then(() => message.success('Command copied — run it in a terminal, then restart Claude Code'))
-                    .catch(() => message.error('Could not copy — select the text and copy manually'))
-                }}
-              >
-                Copy
-              </Button>
-            </div>
-            <div className="row" style={{ marginBottom: '10px', fontSize: '12px' }}>
-              Run the copied command once in a terminal to register Ui.Vision with Claude Code. Then, in any Claude Code
-              chat: &quot;build a Ui.Vision macro that ...&quot;.
             </div>
           </>
         ) : null}
@@ -435,6 +472,9 @@ class AITab extends React.Component<AiTabProps, AiTabAppState> {
             >
               {this.state.showSystemPrompt ? 'Hide' : 'Show'}
             </Button>
+            <a href="https://go.ui.vision/?help=aiprompt" target="_blank" style={{ marginLeft: '10px' }}>
+              (more info)
+            </a>
             {this.state.showSystemPrompt ? (
               <Button
                 size="small"

@@ -23,11 +23,12 @@
 'use strict'
 
 const fs = require('fs')
+const os = require('os')
 const path = require('path')
 const crypto = require('crypto')
 const { WebSocketServer } = require('ws')
 
-const VERSION = '1.0.29'
+const VERSION = '1.1.1'
 const DEFAULT_PORT = 50888
 // MCP protocol revisions this bridge knows; echo the client's if recognized
 const KNOWN_PROTOCOL_VERSIONS = ['2024-11-05', '2025-03-26', '2025-06-18']
@@ -51,6 +52,11 @@ const argValue = (name) => {
 
 const port = parseInt(argValue('--port') || process.env.UIVISION_MCP_PORT || '', 10) || DEFAULT_PORT
 
+// `--setup` is the one-shot installer users run by hand: it registers this
+// bridge with every MCP client on the machine, then prints the pairing token.
+// It never starts a server or the stdio loop.
+const isSetup = argv.includes('--setup')
+
 // The token authenticates the extension: the WebSocket server only accepts a
 // connection whose hello message carries it. Sources, in order: --token arg,
 // env var, a token file next to this script (auto-generated on first run —
@@ -59,7 +65,7 @@ const port = parseInt(argValue('--port') || process.env.UIVISION_MCP_PORT || '',
 // the package dir is a prunable cache (a vanished token would silently
 // regenerate and stop matching the extension setting), and a token inside
 // the package folder is one `npm publish` away from being shipped
-const TOKEN_FILE = path.join(require('os').homedir(), '.uivision_mcp_token')
+const TOKEN_FILE = path.join(os.homedir(), '.uivision_mcp_token')
 // pre-1.0 installs kept the token next to the script — migrate it once
 const LEGACY_TOKEN_FILE = path.join(__dirname, '.uivision_mcp_token')
 const loadToken = () => {
@@ -88,8 +94,11 @@ const loadToken = () => {
   fs.writeFileSync(TOKEN_FILE, fresh + '\n', { mode: 0o600 })
   // log the value, not just the path: when run manually in a terminal this is
   // the only place the user ever sees the token (it is a localhost-only
-  // secret, and they are about to paste it into the extension anyway)
-  log(`generated new auth token: ${fresh} (saved in ${TOKEN_FILE}) — paste it into Ui.Vision Settings > AI > MCP bridge`)
+  // secret, and they are about to paste it into the extension anyway).
+  // --setup prints its own, better-formatted block — don't say it twice.
+  if (!isSetup) {
+    log(`generated new auth token: ${fresh} (saved in ${TOKEN_FILE}) — paste it into Ui.Vision Settings > AI > MCP bridge`)
+  }
   return fresh
 }
 const token = loadToken()
@@ -99,6 +108,162 @@ const tokenMatches = (candidate) => {
   const b = Buffer.from(token)
   return a.length === b.length && crypto.timingSafeEqual(a, b)
 }
+
+// ---------------------------------------------------------------------------
+// --setup: register the bridge with the MCP clients installed on this machine
+// ---------------------------------------------------------------------------
+// Exists because the documented `claude mcp add ...` needs the claude CLI on
+// PATH, which it is not in the desktop app, the VS Code extension, Cursor or
+// Windsurf — the single biggest reason first-time setup fails. Writing the
+// JSON entry ourselves works everywhere.
+
+const HOME = os.homedir()
+
+const claudeDesktopDir = () => {
+  if (process.platform === 'win32') {
+    return path.join(process.env.APPDATA || path.join(HOME, 'AppData', 'Roaming'), 'Claude')
+  }
+  if (process.platform === 'darwin') return path.join(HOME, 'Library', 'Application Support', 'Claude')
+  return path.join(HOME, '.config', 'Claude')
+}
+
+// `key` differs by client: VS Code nests servers under "servers", the rest use
+// "mcpServers". `probe` is what proves the client is installed — we only touch
+// config for apps actually present, so setup never litters the home dir.
+const SETUP_TARGETS = [
+  {
+    name: 'Claude Code',
+    file: path.join(HOME, '.claude.json'),
+    key: 'mcpServers',
+    probe: [path.join(HOME, '.claude.json'), path.join(HOME, '.claude')]
+  },
+  {
+    name: 'Claude Desktop',
+    file: path.join(claudeDesktopDir(), 'claude_desktop_config.json'),
+    key: 'mcpServers',
+    probe: [claudeDesktopDir()]
+  },
+  {
+    name: 'Cursor',
+    file: path.join(HOME, '.cursor', 'mcp.json'),
+    key: 'mcpServers',
+    probe: [path.join(HOME, '.cursor')]
+  },
+  {
+    name: 'Windsurf',
+    file: path.join(HOME, '.codeium', 'windsurf', 'mcp_config.json'),
+    key: 'mcpServers',
+    probe: [path.join(HOME, '.codeium', 'windsurf')]
+  },
+  {
+    name: 'VS Code',
+    file: path.join(HOME, '.vscode', 'mcp.json'),
+    key: 'servers',
+    probe: [path.join(HOME, '.vscode')]
+  }
+]
+
+const exists = (p) => {
+  try { fs.accessSync(p); return true } catch (e) { return false }
+}
+
+// --port is carried into the entry so a user who moved the bridge off 50888
+// keeps that port after setup
+const serverEntry = () => {
+  const args = ['-y', 'uivision-mcp-bridge']
+  if (port !== DEFAULT_PORT) args.push('--port', String(port))
+  return { command: 'npx', args }
+}
+
+const registerWith = (target) => {
+  let config = {}
+  const had = exists(target.file)
+
+  if (had) {
+    let raw
+    try {
+      raw = fs.readFileSync(target.file, 'utf8')
+    } catch (e) {
+      return { ok: false, text: `could not read ${target.file} — ${e.message}` }
+    }
+    if (raw.trim()) {
+      try {
+        config = JSON.parse(raw)
+      } catch (e) {
+        // never overwrite a config we cannot parse: the user would lose every
+        // other MCP server they have registered
+        return { ok: false, text: `${target.file} is not valid JSON — add the entry by hand` }
+      }
+    }
+    try {
+      fs.writeFileSync(target.file + '.uivision-backup', raw)
+    } catch (e) {
+      /* best effort — a missing backup is not worth aborting setup over */
+    }
+  }
+
+  if (!config[target.key] || typeof config[target.key] !== 'object') config[target.key] = {}
+  const unchanged = JSON.stringify(config[target.key].uivision || null) === JSON.stringify(serverEntry())
+  config[target.key].uivision = serverEntry()
+
+  try {
+    fs.mkdirSync(path.dirname(target.file), { recursive: true })
+    fs.writeFileSync(target.file, JSON.stringify(config, null, 2) + '\n')
+  } catch (e) {
+    return { ok: false, text: `could not write ${target.file} — ${e.message}` }
+  }
+  return {
+    ok: true,
+    text: unchanged ? `already registered — ${target.file}` : `registered — ${target.file}${had ? ' (backup saved)' : ''}`
+  }
+}
+
+const runSetup = () => {
+  const out = (s) => process.stdout.write(s + '\n')
+  out('')
+  out(`  Ui.Vision MCP bridge v${VERSION} — setup`)
+  out('  ' + '='.repeat(52))
+  out('')
+
+  const found = SETUP_TARGETS.filter((t) => t.probe.some(exists))
+  const results = []
+
+  if (!found.length) {
+    // nothing detected: Claude Code is by far the common case and its config
+    // is a plain file we can create, so set that up rather than dead-ending
+    out('  No MCP client detected — setting up Claude Code by default.')
+    out('')
+    results.push({ name: SETUP_TARGETS[0].name, ...registerWith(SETUP_TARGETS[0]) })
+  } else {
+    for (const t of found) results.push({ name: t.name, ...registerWith(t) })
+  }
+
+  out('  MCP clients')
+  for (const r of results) out(`    ${r.ok ? '[ok]' : '[! ]'} ${r.name.padEnd(15)} ${r.text}`)
+  out('')
+  out('  Your Ui.Vision pairing token')
+  out('')
+  out(`      ${token}`)
+  out('')
+  out('  Paste it into the browser: open the Ui.Vision side panel, go to')
+  out('  Settings > AI > "MCP bridge (Claude Code)", switch it ON, paste the')
+  out(`  token, check the port reads ${port}, then click Test.`)
+  out('')
+  out('  >> NOW QUIT AND REOPEN THE APP(S) LISTED ABOVE <<')
+  out('  MCP servers load only at startup, so an app that was already running')
+  out('  will not see Ui.Vision. Quit it completely — opening a new chat,')
+  out('  session or tab is not enough. If it was running while this command')
+  out('  wrote its config, quit it and run this command once more: some apps')
+  out('  rewrite their config on exit and would drop the entry.')
+  out('')
+  out('  Then ask it: "build a Ui.Vision macro that ..."')
+  out('  Docs: https://ui.vision/ai/mcp-bridge')
+  out('')
+
+  process.exit(results.every((r) => r.ok) ? 0 : 1)
+}
+
+if (isSetup) runSetup()
 
 // ---------------------------------------------------------------------------
 // tool definitions (MCP side)
@@ -357,14 +522,19 @@ wss.on('connection', (ws) => {
 })
 
 // This text is the agent's only setup instructions when pairing has not
-// happened yet — it must carry the token location, the "show it to the user"
-// step (the token value is displayed nowhere else) and the port, or the agent
-// improvises and the user is left hunting for a hidden dotfile.
+// happened yet, so it carries the token VALUE rather than the token's path.
+// Telling the agent to go read a dotfile is fragile: sandboxes and permission
+// classifiers routinely block reads of files in the home dir, and an agent
+// that cannot complete the step improvises instead (writing the macro to a
+// file, hand-editing MCP config) — the exact failure this text exists to
+// prevent. Handing over the value costs nothing: the MCP client already
+// spawned this process, so it is inside the trust boundary either way.
 const NOT_CONNECTED_TEXT =
-  'The Ui.Vision extension is not connected to the bridge. To get connected: ' +
-  `(1) Read the pairing token file at ${TOKEN_FILE} and show the user the token value in chat — it is displayed nowhere else and they need it for the next step. ` +
-  `(2) Ask the user to open the Ui.Vision side panel, switch ON Settings > AI > MCP bridge, paste the token, make sure the port there is ${port}, and click Test. ` +
-  '(3) The side panel must stay open while you work. ' +
+  'The Ui.Vision extension is not connected to the bridge yet. Walk the user through pairing — do NOT skip it, and do NOT fall back to writing macros to files:\n' +
+  `(1) Show them this pairing token verbatim in your reply — they cannot continue without it:  ${token}\n` +
+  `(2) Ask them to open the Ui.Vision side panel > Settings > AI, switch ON "MCP bridge (Claude Code)", paste that token, check the port reads ${port}, and click Test.\n` +
+  '(3) The side panel must stay open while you work.\n' +
+  `(The same value is stored in ${TOKEN_FILE} — but you do not need to read it, the token above is authoritative.)\n` +
   'Setup docs: https://ui.vision/ai/mcp-bridge'
 
 // send a tool call to the extension under a caller-chosen id (the id is

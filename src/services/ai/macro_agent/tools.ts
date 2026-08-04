@@ -30,11 +30,13 @@ export interface MacroAgentToolResult {
 // auto-selected as "first macro in the tree" rather than chosen by the user.
 // The AI chat must not treat it as something the user asked about (testers
 // saw the agent run the CU_PlayTicTacToe demo — opening the game website —
-// on an unrelated "create a macro" request). Recognized by path: classic
-// table demos install under Classic, the script demos under JS — both below
-// the "Demo and QA Test Scripts" root folder, hence the leading (^|\/) (see
-// config/preinstall_macros.js).
-const PREINSTALL_DEMO_PATH_RE = /(^|\/)(classic|js)\//
+// on an unrelated "create a macro" request). Recognized by path: script
+// demos install under "Demo and QA Test Scripts", classic table demos under
+// "Demo and QA Test Scripts (Classic)" (see config/preinstall_macros.js).
+// The (classic|js)\/ alternative still matches the pre-2026-08 layout, where
+// both sets lived in JS/Classic sub-folders below one root — installs that
+// restored demos back then keep those paths until they restore again.
+const PREINSTALL_DEMO_PATH_RE = /(^|\/)(classic\/|js\/|demo and qa test scripts( \(classic\))?\/)/
 export const isUntouchedPreinstallDemo = (editing: any): boolean => {
   const src = editing && editing.meta && editing.meta.src
   if (!src || !src.id) return false
@@ -516,6 +518,21 @@ export class MacroAgentTools {
       if (!isWebTab(tab)) tab = null
     }
     if (!tab) {
+      // no web tab anywhere — open ui.vision as the play tab (the macro's own
+      // open/uiv.open navigates away as needed); same fallback the MCP bridge
+      // uses (ensureWebTab), so chat and bridge behave alike on a fresh browser
+      this.params.logMessage('No web tab open — opening https://ui.vision as the play tab', 'user', 'result')
+      tab = await Ext.tabs.create({ url: 'https://ui.vision', active: true }).catch(() => null)
+      if (tab && tab.id) {
+        const deadline = Date.now() + 20000
+        while (Date.now() < deadline) {
+          const t: any = await Ext.tabs.get(tab.id).catch(() => null)
+          if (t && t.status === 'complete') { tab = t; break }
+          await delayMs(250)
+        }
+      }
+    }
+    if (!tab) {
       return { text: 'Error: no browser tab available to play the macro in.', isError: true }
     }
     await updateState(setIn(['tabIds', 'toPlay'], tab.id))
@@ -669,6 +686,12 @@ export class MacroAgentTools {
   }
 
   private getPage = async (url?: string): Promise<MacroAgentToolResult> => {
+    const wanted = (url || '').trim()
+    const target = wanted ? (/^[a-z]+:/i.test(wanted) ? wanted : `https://${wanted}`) : ''
+    if (target && !/^(https?:|file:)/i.test(target)) {
+      return { text: `Error: cannot open ${target} — only http(s) and file URLs are supported.`, isError: true }
+    }
+
     // same focused-window web-tab targeting as runMacro (see comment there)
     let tab = await getActiveWebTab()
     if (!tab) {
@@ -676,15 +699,27 @@ export class MacroAgentTools {
       if (!isWebTab(tab)) tab = null
     }
     if (!tab || !tab.id) {
-      return { text: 'Error: no browser tab available to inspect.', isError: true }
-    }
-
-    const wanted = (url || '').trim()
-    if (wanted) {
-      const target = /^[a-z]+:/i.test(wanted) ? wanted : `https://${wanted}`
-      if (!/^(https?:|file:)/i.test(target)) {
-        return { text: `Error: cannot open ${target} — only http(s) and file URLs are supported.`, isError: true }
+      // No web tab anywhere — fresh browser, or a browser-internal page
+      // focused (typical: Firefox sitting on about:debugging right after a
+      // dev install). With a url we know where to go: open it in a NEW tab —
+      // never navigate the internal page itself. Same fallback the MCP
+      // bridge has (ensureWebTab). Without a url there is nothing to inspect.
+      if (!target) {
+        return { text: 'Error: no browser tab available to inspect. Pass a url to get_page to open one.', isError: true }
       }
+      this.params.logMessage(`No web tab open — opening ${target} in a new tab`, 'user', 'result')
+      tab = await Ext.tabs.create({ url: target, active: true }).catch(() => null)
+      if (!tab || !tab.id) {
+        return { text: `Error: could not open a tab for ${target}.`, isError: true }
+      }
+      await updateState(setIn(['tabIds', 'toPlay'], tab.id))
+      const deadline = Date.now() + 20000
+      while (Date.now() < deadline) {
+        const t: any = await Ext.tabs.get(tab.id).catch(() => null)
+        if (t && t.status === 'complete') { tab = t; break }
+        await delayMs(250)
+      }
+    } else if (target) {
       this.params.logMessage(`Opening ${target}`, 'user', 'result')
       const navError = await this.navigateForInspect(tab.id, target)
       if (navError) return { text: navError, isError: true }

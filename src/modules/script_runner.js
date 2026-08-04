@@ -116,7 +116,23 @@ uiv.eval = function (code) { return uiv.__bridge('eval', { code: String(code) })
 // when the search happens inside the right one's rect. Same shapes as
 // uiv.ocr.read({area}); a bare rect is read in the finder's scope, a match
 // from the OTHER scope is rejected (viewport px are not screen px).
-uiv.findElements = function (locator, opts) { return uiv.__bridge('elementSearch', uiv.__opts({ locator: String(locator) }, opts)); };
+// The DOM finder also takes CONTENT wait-conditions: {hasText: true} retries
+// until a match's text/value is NON-EMPTY, {hasText: 'substring'} until it
+// contains the substring (case-insensitive), {textMatches: 'regex' | /re/}
+// until it matches the regex. Matches are SNAPSHOTS — copies taken at find
+// time, never live handles — so these options are THE way to wait for text
+// to appear; re-reading a stored match in a loop polls frozen data forever.
+uiv.findElements = function (locator, opts) {
+  var o = uiv.__opts({ locator: String(locator) }, opts);
+  // a RegExp cannot cross the JSON bridge (it stringifies to {}) — send its parts
+  if (o.textMatches && typeof o.textMatches === 'object' && o.textMatches.source !== undefined) {
+    o.textMatches = {
+      source: String(o.textMatches.source),
+      flags: o.textMatches.flags !== undefined ? String(o.textMatches.flags) : ((o.textMatches.ignoreCase ? 'i' : '') + (o.textMatches.multiline ? 'm' : ''))
+    };
+  }
+  return uiv.__bridge('elementSearch', o);
+};
 uiv.findImages = function (image, opts) { return uiv.__bridge('imageSearch', uiv.__opts({ image: String(image) }, opts)); };
 uiv.ocr = {};
 uiv.ocr.findTexts = function (text, opts) { return uiv.__bridge('textSearch', uiv.__opts({ text: String(text) }, opts)); };
@@ -175,9 +191,14 @@ uiv.ocr.read = function (opts) { return uiv.__bridge('ocrRead', opts || {}); };
 // TABS. The script is pinned to ONE tab (the play tab); these move that pin.
 // Indexes are ABSOLUTE: 1..N left to right in the current window, exactly what
 // the tab bar shows — NOT relative to the starting tab like the classic
-// selectWindow. Every call returns {index, title, url} of the tab that is now
-// current, so the script can VERIFY it landed where it meant to.
-//   uiv.tabs.list()      -> all tabs as [{index, title, url, active}, ...]
+// selectWindow. Every call returns {index, title, url, active, current} of the
+// tab that is now current, so the script can VERIFY it landed where it meant
+// to. 'current' marks the SCRIPT's tab (the one commands act on) — that is the
+// position read, replacing the table-macro !CURRENT_TAB_NUMBER variable, which
+// classic bookkeeping leaves stale next to these calls and getVar refuses.
+// 'active' is the browser's active tab; the two differ if the user clicks
+// another tab mid-run.
+//   uiv.tabs.list()      -> all tabs as [{index, title, url, active, current}, ...]
 //   uiv.tabs.select(2)   -> switch to tab #2
 //   uiv.tabs.open(url)   -> NEW tab on url (uiv.open navigates the CURRENT tab)
 //   uiv.tabs.close()     -> close the current tab, land on its neighbour
@@ -251,7 +272,14 @@ uiv.page.type = function (target, text) {
   }
   return uiv.__bridge('domType', { locator: String(target), text: String(text) });
 };
-uiv.page.select = function (locator, option, opts) { return uiv.__bridge('domSelect', uiv.__opts({ locator: String(locator), option: String(option) }, opts)); };
+uiv.page.select = function (locator, option, opts) {
+  // Without this the missing option becomes the STRING "undefined" and the
+  // call burns the full auto-wait searching the dropdown for an option by
+  // that name - reported as "no option matching 'undefined'", which reads
+  // like a page problem rather than a typo in the script.
+  if (arguments.length < 2) { throw new Error("uiv.page.select: needs the dropdown AND the option - uiv.page.select('id=sort', 'Most recent'). The option is matched by its VISIBLE LABEL; 'value=xyz' or 'index=2' pick it by value or position instead"); }
+  return uiv.__bridge('domSelect', uiv.__opts({ locator: String(locator), option: String(option) }, opts));
+};
 
 // {button: 'left' | 'middle' | 'right'} on the coordinate tiers (browser,
 // desktop) - the same buttons the classic BClick/XClick take as #middle /
@@ -936,7 +964,9 @@ async function retryFind (findOnce, { timeoutS, required, label, retryDelayMs = 
 
       if (Date.now() >= deadline) {
         if (required === false) return []
-        const extra = describeEmpty ? describeEmpty() : ''
+        // awaited: the image finder's diagnosis re-runs the search at the
+        // lowest confidence to report how close the best candidate got
+        const extra = describeEmpty ? await describeEmpty() : ''
         throw new Error(
           `${label}: nothing found within ${Math.round(timeoutMs / 1000)}s` +
           (extra ? ` — ${extra}` : '') +
@@ -1278,7 +1308,7 @@ function pageDomClickAt (x, y) {
       }
       break
     }
-    if (!el) return { ok: false, error: 'nothing at frame-local point ' + x + ',' + y + ' (element scrolled away?)' }
+    if (!el) return { ok: false, error: 'no element at point ' + x + ',' + y + ' any more - the match is STALE: the page scrolled, re-rendered or navigated between the finder and this action. Re-run the finder immediately before acting on it, and never reuse a match across a click, navigation or scroll' }
     if (el.focus) el.focus()
     var opts = { bubbles: true, cancelable: true, composed: true, view: win, clientX: x, clientY: y }
     el.dispatchEvent(new MouseEvent('mousedown', opts))
@@ -1333,7 +1363,7 @@ function pageTypeAt (x, y, text) {
       }
       break
     }
-    if (!el) return { ok: false, error: 'nothing at frame-local point ' + x + ',' + y + ' (element scrolled away?)' }
+    if (!el) return { ok: false, error: 'no element at point ' + x + ',' + y + ' any more - the match is STALE: the page scrolled, re-rendered or navigated between the finder and this action. Re-run the finder immediately before acting on it, and never reuse a match across a click, navigation or scroll' }
 
     var tag = (el.tagName || '').toLowerCase()
     var editable = tag === 'input' || tag === 'textarea'
@@ -1372,6 +1402,50 @@ function pageTypeAt (x, y, text) {
 // Resolves { matches, hiddenCount } — hiddenCount is how many elements
 // matched the locator but were skipped as invisible (summed over frames);
 // it turns a bare "nothing found" timeout into an actionable diagnosis.
+// Content wait-conditions ({hasText, textMatches}) for the DOM finder: the
+// auto-wait keeps retrying until a match's text/value satisfies them, which is
+// the declarative replacement for hand-rolled poll loops. (Those loops are a
+// trap here: matches are point-in-time snapshots, so re-reading a stored
+// match's .value never sees the page change.) A condition passes if EITHER
+// the element's text or its input value satisfies it. Returns null when
+// neither option is set; throws on an invalid regex BEFORE any retrying, so
+// the mistake fails in milliseconds, not after the full find timeout.
+function elementContentCheck (args) {
+  const has = args.hasText
+  const rx = args.textMatches
+  const wantHas = has === true || (typeof has === 'string' && has !== '')
+
+  let re = null
+  if (rx !== undefined && rx !== null && rx !== false) {
+    // {source, flags} when the script passed a RegExp (see the polyfill), a
+    // plain string otherwise. 'g'/'y' are stripped: a sticky lastIndex would
+    // make .test() alternate between hit and miss across retries.
+    const source = (typeof rx === 'object' && rx.source !== undefined) ? String(rx.source) : String(rx)
+    const flags = ((typeof rx === 'object' && rx.flags) ? String(rx.flags) : '').replace(/[gy]/g, '')
+    try {
+      re = new RegExp(source, flags)
+    } catch (e) {
+      throw new Error(`findElements: textMatches is not a valid regular expression: ${e.message}`)
+    }
+  }
+  if (!wantHas && !re) return null
+
+  const needle = typeof has === 'string' ? has.toLowerCase() : null
+  const label = [
+    has === true ? 'hasText: true' : null,
+    needle !== null ? `hasText: ${JSON.stringify(has)}` : null,
+    re ? `textMatches: /${re.source}/${re.flags}` : null
+  ].filter(Boolean).join(', ')
+
+  const test = (m) => {
+    const texts = [m.text || '', m.value !== undefined && m.value !== null ? String(m.value) : '']
+    const hasOk = !wantHas || texts.some(t => (has === true ? t.trim() !== '' : t.toLowerCase().includes(needle)))
+    const reOk = !re || texts.some(t => re.test(t))
+    return hasOk && reOk
+  }
+  return { test, label }
+}
+
 async function elementSearchOnce (tab, args) {
   const results = await chrome.scripting.executeScript({
     target: { tabId: tab.id, allFrames: true },
@@ -1380,7 +1454,7 @@ async function elementSearchOnce (tab, args) {
   })
 
   const frames = (results || []).filter(r => r && r.result)
-  if (!frames.length) throw new Error('elementSearch: no result from page (page still loading?)')
+  if (!frames.length) throw new Error('elementSearch: the page did not answer the search — it is still loading, or it is a page extensions cannot read (chrome://, the Chrome Web Store, a PDF in the viewer, an error page). Wait for the load with uiv.open(url), and on an unreadable page use the visual finders (uiv.findImage / uiv.ocr.findText), which work on pixels instead of the DOM')
 
   // top frame first (absolute viewport coords), then cross-origin roots
   frames.sort((a, b) => (a.frameId === 0 ? 0 : 1) - (b.frameId === 0 ? 0 : 1))
@@ -1405,18 +1479,56 @@ async function elementSearchOnce (tab, args) {
 // finder: imageSearch — the same vision pipeline BClick/visualSearch uses
 // ---------------------------------------------------------------------------
 
-async function imageSearchOnce (args) {
-  const state = store.getState()
-  const minScore = typeof args.minScore === 'number'
+// The confidence the search actually ran at: the call's {minScore}, else the
+// configured default. Shared with the miss diagnosis, which has to name the
+// bar the best candidate failed to clear.
+function effectiveMinScore (args) {
+  return typeof args.minScore === 'number'
     ? args.minScore
-    : (Number(state.config.defaultVisionSearchConfidence) || 0.6)
+    : (Number(store.getState().config.defaultVisionSearchConfidence) || 0.6)
+}
+
+// Why an image search found nothing — the one thing the caller cannot see for
+// themselves, because the matcher drops everything below the threshold before
+// it returns. So on the failure path (once, after the run has already lost its
+// timeout) search AGAIN at the engine's floor of 0.1 and report how close the
+// best candidate on the page actually got. "scored 0.71, your bar is 0.80" and
+// "nothing resembled it at all" are opposite problems with opposite fixes, and
+// a bare "nothing found" makes them look identical — which is what sends people
+// into the one dead end that cannot work here: raising the timeout.
+async function describeImageMiss (args) {
+  const min = effectiveMinScore(args)
+  let best = null
+  try {
+    const probe = await imageSearchOnce({ ...args, minScore: 0.1 })
+    best = probe.reduce((top, m) => (top === null || m.score > top ? m.score : top), null)
+  } catch (e) {
+    return '' // probe failed (file gone, tab closed) — the plain miss stands
+  }
+
+  const seen = 'Ui.Vision searched the image it was given against what is on screen right now; the exact capture it compared is saved as "__lastscreenshot" in screenshot storage — open it to see what the search actually looked at.'
+
+  if (best === null) {
+    return `nothing on the page resembled '${args.image}' even at the lowest confidence (0.1), so the target is NOT ON SCREEN — it has not rendered yet, is scrolled out of the viewport, or something covers it (cookie banner, overlay, popup). Scroll it into view or dismiss the overlay first. If it IS visible to you, the image file itself is wrong or stale: re-capture it with save_element_image / uiv.shot.area. A longer timeout cannot fix either case. ${seen}`
+  }
+
+  const pct = (n) => Number(n).toFixed(2)
+  if (best >= min - 0.15) {
+    return `the closest candidate scored ${pct(best)}, just under the required ${pct(min)} — the element is almost certainly THERE but renders slightly differently than when the image was captured: page zoom other than 100%, a different screen DPI, a theme/dark-mode change, or plain antialiasing. Either lower the bar for this call — uiv.findImage('${args.image}', {minScore: ${pct(Math.max(0.1, Math.floor(best * 100) / 100))}}) — or re-capture the image on this page at 100% zoom, which is the more durable fix. ${seen}`
+  }
+
+  return `the closest candidate scored only ${pct(best)} against a required ${pct(min)} — that is not a near miss, it is a different element, so lowering minScore would only buy a confident click on the wrong thing. Either the image is from another page or another state of this one (re-capture it here with save_element_image / uiv.shot.area), or the target is not visible right now. When the target carries readable text, uiv.ocr.findText survives redesigns that break a pixel match; when it is in the DOM, uiv.$ is exact and free. ${seen}`
+}
+
+async function imageSearchOnce (args) {
+  const minScore = effectiveMinScore(args)
 
   // searchVision resolves + activates the tab from global state's toPlay id —
   // pin it to our target tab first (review finding: otherwise a stale or
   // non-capturable toPlay tab gets screenshotted while click targets another)
   if (args.scope !== 'desktop') {
     const tab = await getTargetTab()
-    if (!tab) throw new Error('E901: no browser tab available')
+    if (!tab) throw new Error(E901_NO_TAB)
     await updateState(setIn(['tabIds', 'toPlay'], tab.id))
   }
 
@@ -1551,6 +1663,19 @@ const FAST_PATH_COMMANDS = /^(click|type|BClick|BType|BMove|XClick|XType|XMove|e
 
 // ${!URL} written into a command a SCRIPT issues — see runOneCommand
 const URL_VAR_IN_TEXT = /\$\{\s*!url\s*\}/i
+
+// ${!CURRENT_TAB_NUMBER} and its RELATIVE family, same render-time door
+const TAB_VAR_IN_TEXT = /\$\{\s*(!current_tab_number(?:_relative(?:_index|_id)?)?)\s*\}/i
+
+// One text for the whole runner. This used to be the bare "E901: no browser
+// tab available" in nine places and the explaining version in exactly one —
+// the same failure told the reader what to do or nothing at all depending on
+// which op hit it.
+const E901_NO_TAB = 'E901: no browser tab available to run this in — only browser-internal pages (chrome://, the new-tab page, extension pages) are open, and commands cannot run there. Start the script with uiv.open(url), which creates a normal tab by itself, or switch to a web page first'
+
+// Was two different sentences for one condition ("a script is running" from
+// the finder probe, "A script is already running" from the runner).
+const SCRIPT_ALREADY_RUNNING = 'A script is already running — press Stop in the side panel before starting another one. (One run at a time is deliberate: two scripts would drive the same tab and fight over the variable pool.)'
 
 let scriptSessionActive = false
 
@@ -1697,7 +1822,17 @@ function applyCommandResultVars (result) {
 async function runOneCommandFast (cmd, target, value, cmdFields, tab, timing) {
   await startScriptSession(tab)
 
-  const command = { cmd, target, value, extra: {}, ...(cmdFields || {}) }
+  // The replay-helper flags ride in each command's extra. The player path gets
+  // them from commonPlayerState; the session path skips that, which silently
+  // made "Highlight elements during replay" a no-op for uiv.page.click/type.
+  const { playHighlightElements, playScrollElementsIntoView } = store.getState().config
+  const command = {
+    cmd,
+    target,
+    value,
+    extra: { playHighlightElements, playScrollElementsIntoView },
+    ...(cmdFields || {})
+  }
   timing.dispatched = Date.now()
   timing.startedAt = timing.dispatched
 
@@ -1757,7 +1892,7 @@ async function runOneCommand (cmd, target, value, cmdFields, opts) {
   const state = store.getState()
 
   if (state.player.status !== Player.C.STATUS.STOPPED) {
-    return { ok: false, error: 'E900: another macro is already running' }
+    return { ok: false, error: 'E900: another macro is already running, so this command cannot start — press Stop in the side panel and run the script again. If nothing looks like it is running, a previous run was interrupted and left the player busy: reload the side panel (close and reopen it) to clear that state' }
   }
 
   // Every command a script issues gets its target/value variable-rendered on
@@ -1772,6 +1907,18 @@ async function runOneCommand (cmd, target, value, cmdFields, opts) {
         'so in a script it holds the PREVIOUS page. Read the page first and pass the string: ' +
         "var url = uiv.eval('return location.href'). " +
         '(On a page that cannot run scripts, uiv.tabs.list() carries a url per tab.)'
+    }
+  }
+
+  // same door for the tab-position variables: only classic-player commands
+  // refresh them, so a rendered value next to uiv.tabs.* is silently stale
+  const tabVar = `${target || ''}\n${value || ''}`.match(TAB_VAR_IN_TEXT)
+  if (tabVar) {
+    return {
+      ok: false,
+      error: `'\${${tabVar[1]}}' cannot be used in a JS script (here: ${cmd}) — only classic-player commands refresh it, ` +
+        'so next to uiv.tabs.select/open/close it holds a STALE position. Read the position first and pass the number: ' +
+        'var tab = uiv.tabs.list().find(function (t) { return t.current; }) — tab.index is 1-based, left to right.'
     }
   }
 
@@ -1819,7 +1966,7 @@ async function runOneCommand (cmd, target, value, cmdFields, opts) {
     }
   }
   if (!tab && !isTabFreeCmd) {
-    return { ok: false, error: 'E901: no browser tab available to run the command in (only browser-internal pages like chrome:// are open — uiv.open creates a tab automatically, or switch to a normal web page first)' }
+    return { ok: false, error: E901_NO_TAB }
   }
 
   // open navigates and then WAITS for the load — and Chrome THROTTLES loading
@@ -2187,7 +2334,7 @@ async function bannerShow (args) {
   if (!html) return bannerClear()
 
   const tab = await getTargetTab()
-  if (!tab) throw new Error('E901: no browser tab available')
+  if (!tab) throw new Error(E901_NO_TAB)
 
   // banner moved to another tab: remove the old element first
   if (bannerState && bannerState.tabId !== tab.id) await bannerClear()
@@ -2353,7 +2500,7 @@ async function scriptPause (input) {
     ms = input
   } else {
     const m = /^\s*(\d+(?:\.\d+)?)\s*(ms|s|m)?\s*$/i.exec(String(input))
-    if (!m) return { ok: false, error: `uiv.sleep: cannot parse duration '${input}'` }
+    if (!m) return { ok: false, error: `uiv.sleep: cannot parse duration '${input}' — pass milliseconds as a number (uiv.sleep(1500)) or a string with a unit: '500ms', '5s', '2m'. (Before adding a sleep at all: finders auto-wait, uiv.open waits for the load, and a click that navigates is waited for — wait for the THING with uiv.$ instead of for a time.)` }
     ms = parseFloat(m[1]) * ({ ms: 1, s: 1000, m: 60000 }[(m[2] || 'ms').toLowerCase()])
   }
 
@@ -2425,7 +2572,7 @@ async function ocrReadText (args) {
 
   if (!isDesktop) {
     const tab = await getTargetTab()
-    if (!tab) throw new Error('E901: no browser tab available')
+    if (!tab) throw new Error(E901_NO_TAB)
     await updateState(setIn(['tabIds', 'toPlay'], tab.id))
   }
 
@@ -2694,6 +2841,30 @@ async function waitForArmedDownload (wait, timeoutS) {
   return asValue(vars.get('!LAST_DOWNLOADED_FILE_NAME') || '')
 }
 
+// The classic click/type auto-wait for their element INSIDE the player
+// pipeline (runCommandWithRetry's 'Tag waiting' ticker) — a channel the
+// script status bar does not render, and which the panel drops anyway on the
+// session fast path (app status never reaches PLAYER there, see
+// onTimeoutStatus in index.js). So a uiv.page.click on a missing element
+// read as a hang for the whole !TIMEOUT_WAIT. Emit the script runner's own
+// countdown around the call instead, exactly like the 'open' case does for
+// page loads. The first tick fires at 500ms — a click that hits an element
+// already on the page stays countdown-free.
+async function withElementWaitCountdown (label, fn) {
+  const timeoutS = parseFloat(getVarsInstance().get('!TIMEOUT_WAIT'))
+  const capMs = (Number.isFinite(timeoutS) && timeoutS > 0 ? timeoutS : defaultFindTimeoutS()) * 1000
+  const started = Date.now()
+  const tick = setInterval(() => {
+    emit('wait', { label, remainingS: Math.max(0, Math.ceil((capMs - (Date.now() - started)) / 1000)) })
+  }, 500)
+  try {
+    return await fn()
+  } finally {
+    clearInterval(tick)
+    emit('wait', null)
+  }
+}
+
 async function dispatchBridge (op, args) {
   logBridgeCall(op, args)
   if (PAGE_OPS.test(op)) await awaitPageQuiet()
@@ -2766,21 +2937,37 @@ async function dispatchBridge (op, args) {
 
     case 'elementSearch': {
       const tab = await getTargetTab()
-      if (!tab) return { ok: false, error: 'E901: no browser tab available' }
+      if (!tab) return { ok: false, error: E901_NO_TAB }
+      const content = elementContentCheck(args)
       let hiddenCount = 0
+      let contentMissCount = 0
+      let contentMissSeen = ''
       const matches = await retryFind(
         async () => {
           const r = await elementSearchOnce(tab, args)
           hiddenCount = r.hiddenCount
-          return r.matches
+          if (!content) return r.matches
+          const passing = r.matches.filter(content.test)
+          contentMissCount = r.matches.length - passing.length
+          if (!passing.length && r.matches.length) {
+            // for the timeout diagnosis: what the closest candidate DID say
+            const m = r.matches[0]
+            contentMissSeen = String((m.value !== undefined && m.value !== null && m.value !== '' ? m.value : m.text) || '').slice(0, 120)
+          }
+          return passing
         },
         {
           timeoutS: args.timeout,
           required: args.required,
           label: `findElements('${args.locator}')`,
-          describeEmpty: () => hiddenCount > 0
-            ? `${hiddenCount} matching element(s) DO exist but are HIDDEN (collapsed/invisible, e.g. a responsive search box or menu behind a toggle — the side panel narrows the page). Reveal it first (click the toggle/icon that opens it), or pass {includeHidden: true} if you only need to READ it`
-            : ''
+          describeEmpty: () => {
+            if (content && contentMissCount > 0) {
+              return `${contentMissCount} element(s) DO match the locator but their text/value never satisfied {${content.label}} — last seen: ${JSON.stringify(contentMissSeen)}`
+            }
+            return hiddenCount > 0
+              ? `${hiddenCount} matching element(s) DO exist but are HIDDEN (collapsed/invisible, e.g. a responsive search box or menu behind a toggle — the side panel narrows the page). Reveal it first (click the toggle/icon that opens it), or pass {includeHidden: true} if you only need to READ it`
+              : ''
+          }
         }
       )
       // scope travels with every match so the input tiers can refuse a match
@@ -2797,7 +2984,12 @@ async function dispatchBridge (op, args) {
       // a banner in the capture can occlude the match — see withBannerHidden
       const matches = await withBannerHidden(() => retryFind(
         () => imageSearchOnce(args),
-        { timeoutS: args.timeout, required: args.required, label: `findImages('${args.image}')` }
+        {
+          timeoutS: args.timeout,
+          required: args.required,
+          label: `findImages('${args.image}')`,
+          describeEmpty: () => describeImageMiss(args)
+        }
       ))
       const scope = args.scope === 'desktop' ? 'desktop' : 'browser'
       return asValue(matches.map(m => ({ ...m, scope })))
@@ -2843,14 +3035,20 @@ async function dispatchBridge (op, args) {
     // sets the value in ONE command — no separate click to focus the field
     // first, which is what makes it the fast path for form filling.
     case 'domClickLocator': {
-      const r = await runOneCommand('click', args.locator, '', null, { fast: true })
+      const r = await withElementWaitCountdown(
+        `uiv.page.click('${String(args.locator).slice(0, 80)}')`,
+        () => runOneCommand('click', args.locator, '', null, { fast: true })
+      )
       if (!r.ok) return r
       await settleAfterClick(null)
       return asValue(undefined)
     }
 
     case 'domType': {
-      const r = await runOneCommand('type', args.locator, args.text, null, { fast: true })
+      const r = await withElementWaitCountdown(
+        `uiv.page.type('${String(args.locator).slice(0, 80)}')`,
+        () => runOneCommand('type', args.locator, args.text, null, { fast: true })
+      )
       return r.ok ? asValue(undefined) : r
     }
 
@@ -2859,14 +3057,14 @@ async function dispatchBridge (op, args) {
     // reach). Same tier as domType: DOM value + input/change events, no CDP.
     case 'domTypeAt': {
       const tab = await getTargetTab()
-      if (!tab) return { ok: false, error: 'E901: no browser tab available' }
+      if (!tab) return { ok: false, error: E901_NO_TAB }
       const results = await chrome.scripting.executeScript({
         target: { tabId: tab.id, frameIds: [args.frameId || 0] },
         func: pageTypeAt,
         args: [Math.round(args.x), Math.round(args.y), String(args.text)]
       })
       const r = results && results[0] && results[0].result
-      if (!r) return { ok: false, error: `uiv.page.type: no result from frame ${args.frameId}` }
+      if (!r) return { ok: false, error: `uiv.page.type: frame ${args.frameId} did not answer — it was removed or navigated between the finder and this call, so the match is stale. Re-run the finder right before typing (a match from before a click or navigation cannot be used afterwards)` }
       if (!r.ok) return { ok: false, error: `uiv.page.type: ${r.error}` }
       return asValue(undefined)
     }
@@ -2877,14 +3075,14 @@ async function dispatchBridge (op, args) {
     // meaningless to CDP
     case 'domClickAt': {
       const tab = await getTargetTab()
-      if (!tab) return { ok: false, error: 'E901: no browser tab available' }
+      if (!tab) return { ok: false, error: E901_NO_TAB }
       const results = await chrome.scripting.executeScript({
         target: { tabId: tab.id, frameIds: [args.frameId || 0] },
         func: pageDomClickAt,
         args: [Math.round(args.x), Math.round(args.y)]
       })
       const r = results && results[0] && results[0].result
-      if (!r) return { ok: false, error: `uiv.page.click: no result from frame ${args.frameId}` }
+      if (!r) return { ok: false, error: `uiv.page.click: frame ${args.frameId} did not answer — it was removed or navigated between the finder and this call, so the match is stale. Re-run the finder right before clicking (a match from before a click or navigation cannot be used afterwards)` }
       if (!r.ok) return { ok: false, error: `uiv.page.click (frame ${args.frameId}): ${r.error}` }
       if (args.frameId) store.dispatch(act.addLog('echo', `DOM click in frame ${args.frameId} (<${r.tag}>)`))
       await settleAfterClick(r.tag || args.tag)
@@ -2952,7 +3150,7 @@ async function dispatchBridge (op, args) {
 
     case 'domSelect': {
       const tab = await getTargetTab()
-      if (!tab) return { ok: false, error: 'E901: no browser tab available' }
+      if (!tab) return { ok: false, error: E901_NO_TAB }
       let hit = null
       await retryFind(
         async () => {
@@ -2971,7 +3169,7 @@ async function dispatchBridge (op, args) {
           }
           // found but failed: E903 (custom widget) fails fast via retryFind's
           // fatal-error list; a wrong option label retries (async option lists)
-          throw new Error(foundFrames[0].error || 'select failed')
+          throw new Error(foundFrames[0].error || `uiv.page.select: found the dropdown but could not pick '${args.option}' — no reason reported. Check the option exists (the error normally lists the available labels), or select it by 'value=…' / 'index=N' instead`)
         },
         { timeoutS: args.timeout, required: args.required, label: `uiv.page.select('${args.locator}', '${args.option}')` }
       )
@@ -3050,12 +3248,12 @@ async function dispatchBridge (op, args) {
     case 'shotArea': {
       const isDesktop = args.scope === 'desktop'
       const rect = normalizeRectArg({ rect: args.rect }, 'uiv.shot.area')
-      if (!rect) return { ok: false, error: 'uiv.shot.area: empty crop rectangle' }
+      if (!rect) return { ok: false, error: 'uiv.shot.area: the crop rectangle has no size — the match it came from is zero-width/height, which happens when the element is collapsed, hidden or scrolled out of the viewport. Scroll it into view (or reveal it) and find it again, or pass an explicit {width, height}' }
 
       if (!isDesktop) {
         // pin the capture to the script's tab, same as the visual finders
         const tab = await getTargetTab()
-        if (!tab) throw new Error('E901: no browser tab available')
+        if (!tab) throw new Error(E901_NO_TAB)
         await updateState(setIn(['tabIds', 'toPlay'], tab.id))
       }
 
@@ -3084,11 +3282,15 @@ async function dispatchBridge (op, args) {
       // setup counts the tabs of the window the run actually works in
       const cur = await getTargetTab()
       const query = cur ? { windowId: cur.windowId } : {}
-      const info = (t, i) => ({ index: i + 1, title: t.title || '', url: t.url || '', active: !!t.active })
+      // `current` = the script's tab, the position read that replaces the
+      // table-macro !CURRENT_TAB_NUMBER variable (stale next to these calls,
+      // so getVar refuses it). `active` = the browser's active tab; they
+      // differ if the user clicks another tab mid-run.
+      const info = (t, i, curId) => ({ index: i + 1, title: t.title || '', url: t.url || '', active: !!t.active, current: t.id === curId })
 
       if (op === 'tabsList') {
         const tabs = await Ext.tabs.query(query)
-        return asValue(tabs.map(info))
+        return asValue(tabs.map((t, i) => info(t, i, cur && cur.id)))
       }
 
       if (op === 'tabsSelect') {
@@ -3104,7 +3306,7 @@ async function dispatchBridge (op, args) {
         await Ext.tabs.update(t.id, { active: true })
         scriptTabId = t.id
         store.dispatch(act.addLog('info', `script tab → #${n} "${(t.title || t.url || '').slice(0, 50)}"`))
-        return asValue(info(t, n - 1))
+        return asValue(info(t, n - 1, t.id))
       }
 
       if (op === 'tabsOpen') {
@@ -3130,7 +3332,7 @@ async function dispatchBridge (op, args) {
         const tabs = await Ext.tabs.query(cur ? { windowId: cur.windowId } : {})
         const idx = Math.max(0, tabs.findIndex(x => x.id === t.id))
         store.dispatch(act.addLog('info', `script tab → #${idx + 1} (new) "${(loaded.title || loaded.url || '').slice(0, 50)}"`))
-        return asValue(info(loaded, idx))
+        return asValue(info(loaded, idx, t.id))
       }
 
       // tabsClose: close the current tab, land on whatever the browser
@@ -3143,7 +3345,7 @@ async function dispatchBridge (op, args) {
       const tabs = await Ext.tabs.query({ windowId: next.windowId })
       const idx = Math.max(0, tabs.findIndex(x => x.id === next.id))
       store.dispatch(act.addLog('info', `script tab → #${idx + 1} "${(next.title || next.url || '').slice(0, 50)}" (previous tab closed)`))
-      return asValue(info(next, idx))
+      return asValue(info(next, idx, next.id))
     }
 
     // storage -> the browser's Downloads folder, whatever the file is
@@ -3227,7 +3429,7 @@ async function dispatchBridge (op, args) {
       const x = Number(vars.get('!AI1'))
       const y = Number(vars.get('!AI2'))
       if (!isFinite(x) || !isFinite(y)) {
-        return { ok: false, error: `uiv.ai.find: the model did not return usable coordinates for '${args.question}'` }
+        return { ok: false, error: `uiv.ai.find: the model did not return usable coordinates for '${args.question}' — it could not tell where that is on the screenshot. Describe the target by what it LOOKS like and where it sits ('the blue Accept all button at the bottom of the cookie bar'), and make sure it is actually visible in the viewport (ai.find does NOT auto-wait — wait for the page with uiv.$ first). If it stays unreliable, use a real finder instead: uiv.$ for anything in the DOM, uiv.ocr.findText for rendered text, or save_element_image + uiv.findImage for a fixed graphic` }
       }
       // a real match object, so it composes with uiv.browser.* / uiv.desktop.*
       // and the scope guard catches a desktop point used in the browser tier
@@ -3297,7 +3499,7 @@ async function textSearchOnce (args) {
 
   if (!isDesktop) {
     const tab = await getTargetTab()
-    if (!tab) throw new Error('E901: no browser tab available')
+    if (!tab) throw new Error(E901_NO_TAB)
     // the capture path resolves the tab via global state's toPlay id
     await updateState(setIn(['tabIds', 'toPlay'], tab.id))
   }
@@ -3392,14 +3594,14 @@ function pageFlashRects (rects) {
 // Single finder attempt (no auto-wait retry — Find should answer NOW).
 // Never rejects; logs the outcome either way.
 export async function probeFind (kind, target) {
-  if (running) return { ok: false, error: 'a script is running' }
+  if (running) return { ok: false, error: SCRIPT_ALREADY_RUNNING }
 
   try {
     // Find always targets the tab the user is looking at right now — never
     // a tab pinned by a previous script run
     scriptTabId = null
     const tab = await getTargetTab()
-    if (!tab) return { ok: false, error: 'E901: no browser tab available' }
+    if (!tab) return { ok: false, error: E901_NO_TAB }
 
     let matches = []
     let hiddenCount = 0
@@ -3598,7 +3800,7 @@ function buildInterpreter (code) {
           const key = String(name).trim()
 
           if (!key) {
-            return interp.nativeToPseudo({ ok: false, error: "getVar: needs a variable name, e.g. uiv.getVar('!CURRENT_TAB_NUMBER')" })
+            return interp.nativeToPseudo({ ok: false, error: "getVar: needs a variable name, e.g. uiv.getVar('!LASTCOMMANDOK')" })
           }
 
           // Replaced by a finder that returns the value directly.
@@ -3747,7 +3949,7 @@ const yieldMacrotask = (() => {
 //                            !CMD_VAR1..N from a bookmark/html invocation
 export async function runScript (code, opts = {}) {
   if (running) {
-    throw new Error('A script is already running')
+    throw new Error(SCRIPT_ALREADY_RUNNING)
   }
 
   running = true

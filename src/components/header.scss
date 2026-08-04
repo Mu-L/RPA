@@ -55,7 +55,9 @@
   }
 
   .actions {
-    margin-top: 6px;
+    // No margin-top: it survived from before this was a flex row and now only
+    // shortens the box, so align-items centred Record/Play 3px below Save —
+    // which centres in the full 44px over in .select-case.
     display: flex;
     align-items: center;
     gap: 5px;

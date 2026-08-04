@@ -118,6 +118,14 @@ class Sampling {
           continue
         }
 
+        // A stop that arrives during the (multi-second) API call must not still
+        // cost the user a click or a keystroke in the page — by the time an
+        // action lands, the next macro may already own that tab. Same check as
+        // at the top of the loop in _run, repeated here where it matters.
+        if (this.params.getTerminationRequest(this.loopCompletedCount)) {
+          return toolResults
+        }
+
         console.log('Processing tool action:', action)
         const result = await this.computer.processAction(action)
 
