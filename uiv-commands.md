@@ -131,7 +131,7 @@ Basics of the JS API (details in the AI system prompt and
 
   `uiv.$('css=h1')` is the trap: an `h1` exists on the old page too, so it
   matches the **stale** one instantly and no waiting happens. Never poll for a
-  navigation with `Date.now()` + `uiv.sleep` on `!URL` — `!URL` commits before
+  navigation with `Date.now()` + `uiv.sleep` on the URL — the URL commits before
   the load finishes, so the loop races the thing it is meant to guard.
 - **Do not `uiv.sleep` after an action.** Finders auto-wait, `uiv.open` waits for
   the page load, and a click that navigates is waited for automatically — so
@@ -139,10 +139,28 @@ Basics of the JS API (details in the AI system prompt and
   is both faster and more reliable than `uiv.sleep(3000)`. Legitimate sleeps are
   settling an animation that changes nothing findable, and pacing a poll loop —
   say which in a comment.
+- **Matches are snapshots, not live handles.** A finder result is a copy taken
+  at find time — a stored match's `.text` / `.value` **never update**, so
+  re-reading one in a loop polls frozen data forever (the page fills in, the
+  script never sees it). To wait for content, tell the finder instead:
+
+  ```js
+  // waits until the async result actually arrives — one call, no loop
+  const r = uiv.$('id=txtAreaParsedResult', {hasText: true, timeout: 60});
+  uiv.log(r.value);
+  ```
+
+  `{hasText: true}` = non-empty text/value, `{hasText: 'substring'}` =
+  case-insensitive substring, `{textMatches: 'regex'}` = regex (DOM finders
+  only). If a loop is truly unavoidable, re-run the finder inside it — never
+  re-read a match found before the loop.
 - Variables are shared with the classic engine — **special `!` variables
-  included**: `uiv.getVar('!URL')`, `uiv.getVar('!CURRENT_TAB_NUMBER')`,
+  included**: `uiv.getVar('!COL1')` after a `csvRead`,
   `uiv.setVar('!TIMEOUT_PAGELOAD', 60)`. Same pool the `${...}` syntax uses,
-  same names. See [Special variables](#special-variables).
+  same names. See [Special variables](#special-variables). The exceptions are
+  table-macros-only: `!URL` — in JS ask the page
+  (`uiv.eval('return location.href')`) — and `!CURRENT_TAB_NUMBER` — in JS the
+  `uiv.tabs.*` calls return the position.
 
 ## The native `uiv.*` API
 
@@ -153,7 +171,8 @@ Basics of the JS API (details in the AI system prompt and
 | `uiv.$(locator)` | **first** DOM match (no `[0]` needed) — all frames incl. cross-origin + open shadow roots |
 | locators | `css=` `id=` `name=` `xpath=` `link=` (exact anchor text); bare string = css. For a PARTIAL link match use `xpath=//a[contains(normalize-space(.), 'text')]` — `contains(text(), …)` reads only the first direct text node and skips whitespace normalisation |
 | `uiv.$$(locator)` | **all** DOM matches (array) |
-| `uiv.findElements(locator, opts)` | long form with options: `{timeout, required: false, includeHidden: true}` |
+| `uiv.findElements(locator, opts)` | long form with options: `{timeout, required: false, includeHidden: true, hasText, textMatches}` |
+| **wait for content** | `{hasText: true}` retries until the match's text/value is **non-empty**, `{hasText: 'substring'}` until it contains the substring (case-insensitive), `{textMatches: 'regex'}` until it matches — `uiv.$('id=result', {hasText: true, timeout: 60})` waits out an async result in one call, no poll loop |
 | `uiv.page.click('css=#buy')` | every input action accepts DOM locator strings directly |
 
 **Visual world** (pixels — anything the eye sees, any frame/canvas):
@@ -251,7 +270,7 @@ them in new scripts.
 | `open` | `uiv.open('https://…')` — creates a tab automatically when only browser-internal pages (chrome://) are open |
 | `openBrowser` | `uiv.run('openBrowser', url)` |
 | `refresh` | `uiv.run('refresh')` |
-| `selectWindow` (tab=N / tab=open / tab=close / title=…) | **native:** `uiv.tabs.select(n)` / `uiv.tabs.open(url)` / `uiv.tabs.close()` — indexes are **absolute** (1..N left to right, what the tab bar shows), *not* start-tab-relative like the classic command, and every call returns `{index, title, url}` so the script can **verify** where it landed; `uiv.tabs.list()` shows all tabs. A click that opens a new tab still does **not** switch to it — select it explicitly. (`uiv.run('selectWindow', …)` remains for `title=…` matching) |
+| `selectWindow` (tab=N / tab=open / tab=close / title=…) | **native:** `uiv.tabs.select(n)` / `uiv.tabs.open(url)` / `uiv.tabs.close()` — indexes are **absolute** (1..N left to right, what the tab bar shows), *not* start-tab-relative like the classic command, and every call returns `{index, title, url, active, current}` so the script can **verify** where it landed; `uiv.tabs.list()` shows all tabs, with `current: true` on the tab the script acts on — the position read that replaces `!CURRENT_TAB_NUMBER`. A click that opens a new tab still does **not** switch to it — select it explicitly. (`uiv.run('selectWindow', …)` remains for `title=…` matching) |
 | `setWindowSize` | `uiv.run('setWindowSize', '1366x768')` |
 | `bringBrowserToForeground` | `uiv.run('bringBrowserToForeground', 'true')` |
 | `bringIDEandBrowserToBackground` | `uiv.run('bringIDEandBrowserToBackground')` |
@@ -324,11 +343,11 @@ names a table macro uses in `${...}`. There is no separate JS namespace:
 ```js
 uiv.setVar('!TIMEOUT_PAGELOAD', 60);           // holds for the rest of the run
 uiv.open('https://ui.vision/demo/tabs');       // '!' variables exist from here on
-var url = uiv.getVar('!URL');
-var tab = uiv.getVar('!CURRENT_TAB_NUMBER');   // live 0-based tab index
+var ok = uiv.getVar('!LASTCOMMANDOK');         // result of the last command
+var url = uiv.eval('return location.href');    // NOT !URL — see rule 4
 ```
 
-Three rules make this predictable:
+Five rules make this predictable:
 
 1. **Read them after a command, not before.** `!` variables are filled in by
    UI.Vision commands, so before the first `uiv.*` call that dispatches one
@@ -342,11 +361,27 @@ Three rules make this predictable:
    command — read them immediately after the call that produces them and keep
    the value in a JS variable. (`!IMAGEWIDTH` / `!IMAGEHEIGHT` are the
    exception: they survive.)
+4. **`!URL` throws — read the page instead.** Only commands that go through the
+   classic player refresh it, so in a script it holds the *previous* page after
+   `uiv.page.click(match)`, `uiv.desktop.*` or an OCR call, and it is one command
+   behind even on the paths that do refresh it. `uiv.getVar('!URL')` and `${!URL}`
+   passed to `uiv.run` both fail with that explanation. The current URL is
+   `uiv.eval('return location.href')`; on a page that cannot run scripts
+   (`chrome://`, the PDF viewer, an error page) `uiv.tabs.list()` carries a `url`
+   per tab. `!URL` keeps working unchanged in table macros.
+5. **Tab position comes from `uiv.tabs.*`, not a variable.** `!CURRENT_TAB_NUMBER`
+   throws in JS for the same reason as `!URL`: only classic-player commands
+   refresh it, so next to `uiv.tabs.select/open/close` it silently holds the old
+   position. Every `uiv.tabs.*` call returns `{index, title, url, active,
+   current}`, and `uiv.tabs.list()` marks the tab the script acts on with
+   `current: true` — indexes 1-based, left to right, what the tab bar shows
+   (the classic variable was 0-based). `${!CURRENT_TAB_NUMBER}` passed to
+   `uiv.run` fails the same way. Table macros keep both, unchanged.
 
 | Variable | | |
 |---|---|---|
-| `!URL` | read-only | URL of the current page |
-| `!CURRENT_TAB_NUMBER` | read-only | 0-based index of the play tab |
+| `!URL` | table macros only | URL of the current page — throws in JS, use `uiv.eval('return location.href')` |
+| `!CURRENT_TAB_NUMBER` | table macros only | 0-based index of the play tab — throws in JS, use `uiv.tabs.list()` (the `current: true` entry, 1-based) |
 | `!LASTCOMMANDOK`, `!STATUSOK` | read-only / writable | result of the last command |
 | `!COL1`, `!COL2`, … | read-only | current CSV row after `csvRead` |
 | `!CSVREADSTATUS`, `!CSVREADMAXROW`, `!CSVREADLINENUMBER` | mixed | CSV read state |
@@ -362,15 +397,16 @@ Three rules make this predictable:
 
 **`!CURRENT_TAB_NUMBER_RELATIVE` is deprecated** (along with its
 `_INDEX` / `_ID` bookkeeping companions) and **cannot work in a JS script**:
-each `uiv.*` call is its own mini player run and re-baselines it. Reading it
-throws, rather than returning a number that looks right and isn't. Table macros
-that already use it keep working. In JS, capture the start index once and
-subtract — same numbers, and it is what the DemoTabs demo does:
+each classic-bridge `uiv.*` call is its own mini player run and re-baselines
+it. Reading it throws, rather than returning a number that looks right and
+isn't. Table macros that already use it keep working. In JS, capture the start
+index once and subtract — same numbers, and it is what the DemoTabs demo does:
 
 ```js
 uiv.open('https://ui.vision/demo/tabs');
-var startTab = Number(uiv.getVar('!CURRENT_TAB_NUMBER'));
-function tabRel () { return Number(uiv.getVar('!CURRENT_TAB_NUMBER')) - startTab; }
+var tabIndex = function () { return uiv.tabs.list().find(function (t) { return t.current; }).index; };
+var startTab = tabIndex();
+function tabRel () { return tabIndex() - startTab; }
 ```
 
 Finder auto-wait reads the `!TIMEOUT_WAIT` **setting** at call time, so writing
