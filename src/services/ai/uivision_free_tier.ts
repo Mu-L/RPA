@@ -67,7 +67,7 @@ export const isFreeTierConsentPending = (config: { [key: string]: any }): boolea
 export const mapUIVisionFreeTierError = (message: string): string | null => {
   if (!message) return null
   if (message.includes('E703')) {
-    return 'Daily free AI limit reached. It resets at midnight. Add your own API key in Settings > AI for unlimited use.'
+    return 'Daily free AI limit reached. It resets at midnight. Add your own API key in Settings > AI for unlimited use or sign-up for the Ui.Vision AI PRO plan.'
   }
   if (message.includes('E704') || message.includes('E705')) {
     return 'The free AI tier is currently unavailable (beta, no uptime guarantee). Add your own API key in Settings > AI for reliable service.'

@@ -7,6 +7,7 @@ import { NO_ANTHROPIC_API_KEY_ERROR } from '../anthropic'
 import Sampling, { ClaudeSamplingMessage, SamplingError, SamplingParams } from './sampling'
 import OpenAICompatSampling, { ISamplingEngine } from '../openai_compatible/sampling'
 import { getInstallIdSync, isFreeTierConsentPending, mapUIVisionFreeTierError } from '../uivision_free_tier'
+import { isCdpInputAvailable } from '@/services/cdp_input'
 import { ComputerUseMessageType } from './model'
 
 interface ComputerUseServiceParams {
@@ -240,8 +241,14 @@ export class ComputerUseService {
 
     // Browser scope uses the CDP-based B commands (no XModule needed, works
     // with the window in the background). Desktop scope still needs XModule.
-    const clickCmd = isDesktop ? 'XClick' : 'BClick'
-    const moveCmd = isDesktop ? 'XMove' : 'BMove'
+    // Firefox has no debugger API, so browser scope falls back to the
+    // OS-level X commands there — same viewport coordinates, aimed by the
+    // XModule (whose own error explains the install if it is missing).
+    // Without this the agent's first click died with E331 and the whole run
+    // could only report "cannot click on Firefox".
+    const useOsInput = isDesktop || !isCdpInputAvailable()
+    const clickCmd = useOsInput ? 'XClick' : 'BClick'
+    const moveCmd = useOsInput ? 'XMove' : 'BMove'
 
     const executeMouseCommand = (command: any) => {
       console.log('executeMouseCommand:>> command:>> ', command)
@@ -315,8 +322,10 @@ export class ComputerUseService {
   handleKeyboardAction = async (action: any) => {
     console.log('handleKeyboardAction:>> action::', action)
 
-    // Browser scope types via CDP (BType, no XModule); desktop scope needs XType
-    const typeCmd = this.params.isDesktop ? 'XType' : 'BType'
+    // Browser scope types via CDP (BType, no XModule); desktop scope needs
+    // XType — as does Firefox in every scope (no debugger API, see
+    // handleMouseAction)
+    const typeCmd = this.params.isDesktop || !isCdpInputAvailable() ? 'XType' : 'BType'
 
     const executeKeyboardCommand = (action: any) => {
       console.log('executeKeyboardCommand:>> action:>> ', action)

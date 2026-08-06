@@ -7,10 +7,12 @@ import Ext from '@/common/web_extension'
 import { getState } from '@/ext/common/global_state'
 import { store } from '@/redux'
 import * as act from '@/actions'
+import { Actions } from '@/actions/simple_actions'
 import { getScreenshotInSearchArea, saveDataUrlToLastDesktopScreenshot, saveDataUrlToLastScreenshot } from '@/search_vision'
 import { getNativeCVAPI } from '@/services/desktop'
 import * as C from '@/common/constant'
 import { getFileBufferFromScreenshotStorage } from '@/common/ai_vision'
+import { getVarsInstance } from '@/common/variables'
 
 export const hideDownloadBar = () => csIpc.ask('PANEL_DISABLE_DOWNLOAD_BAR', {}).catch(() => true)
 
@@ -119,6 +121,44 @@ export const replaceEscapedChar = (str:string, command:any, field:string, should
   }, str)
 }
 
+// Cover the extension UI (IDE window and side panel render it from the same
+// ocrInDesktopMode flag) while a desktop screenshot is captured: without it,
+// desktop-scope OCR/vision reads the macro source and chat text shown in the
+// panel and happily matches the script's own words. The classic desktop
+// X*/OCR commands raise the flag for their whole duration (shouldShowOcrOverlay
+// in run_command); this wrapper scopes it to ONE capture for every other path
+// (JS-script desktop finders, uiv.shot.desktop, bridge screenshots) and leaves
+// the flag alone when the classic flow already owns it.
+// The macro-settable switch for that cover: store false into
+// !CAPTURE_HIDE_GUI and desktop captures INCLUDE the extension UI — what the
+// ClearSidebarLogViaGUI demos need, since they automate the side panel
+// itself. Anything except an explicit false keeps the cover, so hiding stays
+// the default, and a fresh run resets the variable to that default.
+export const shouldHideGuiDuringCapture = (): boolean => {
+  try {
+    const v = getVarsInstance().get('!CAPTURE_HIDE_GUI')
+    return !(v === false || String(v).toLowerCase() === 'false')
+  } catch (e) {
+    return true
+  }
+}
+
+export const withDesktopCaptureCover = async <T>(fn: () => Promise<T>): Promise<T> => {
+  if (!shouldHideGuiDuringCapture()) return fn()
+
+  const wasOn = !!(store.getState() as any).ocrInDesktopMode
+  if (!wasOn) {
+    store.dispatch(Actions.setOcrInDesktopMode(true))
+    // let the panel repaint before the native capture grabs the screen
+    await delay(() => {}, 150)
+  }
+  try {
+    return await fn()
+  } finally {
+    if (!wasOn) store.dispatch(Actions.setOcrInDesktopMode(false))
+  }
+}
+
 export const captureImage = async (args: any) => {
   console.log('captureImage args >>>', args)
   const { searchArea, storedImageRect, scaleDpi, isDesktop, devicePixelRatio } = args
@@ -150,8 +190,7 @@ export const captureImage = async (args: any) => {
       }
     }
     
-    return cvApi
-      .captureDesktop({ path: undefined })
+    return withDesktopCaptureCover(() => cvApi.captureDesktop({ path: undefined }))
       .then((hardDrivePath) => cvApi.readFileAsDataURL(hardDrivePath, true))
       .then((originalDataUrl) => {
         return crop(originalDataUrl).then(({ dataUrl, offset }) => {

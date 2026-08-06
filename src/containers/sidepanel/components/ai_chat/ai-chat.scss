@@ -47,6 +47,17 @@
         margin-right: 2px;
         font-weight: bold;
       }
+
+      // AI PRO upsell rendered under the daily-limit error (see index.tsx)
+      .ai-pro-banner {
+        margin: 6px 0 2px;
+        padding: 6px 10px;
+        border: 1px solid #ffd666;
+        border-radius: 6px;
+        background: #fffbe6;
+        color: #333;
+        font-size: 12px;
+      }
     }
 
     // empty-chat welcome: intro line, example prompt chips, API key hint
@@ -249,6 +260,12 @@ html[data-theme='dark'] {
 
     code {
       background: rgba(255, 255, 255, 0.14);
+    }
+
+    .ai-pro-banner {
+      border-color: #7a6420;
+      background: #3a3320;
+      color: #f6f6f9;
     }
   }
 

@@ -37,7 +37,7 @@ export const STARTER_SCRIPT = `// Ui.Vision JS script - modern JavaScript
 //     p.type('id=email', 'a@b.com');  b.click(uiv.findImage('buy.png'));
 // NAVIGATE: uiv.open(url)   uiv.eval('return document.title')
 //           the current URL is uiv.eval('return location.href') — !URL is table-macros-only
-// MISC: uiv.log(msg, 'green')   uiv.sleep('1s')   uiv.getVar('!COL1')   uiv.setVar('n', 1)
+// MISC: uiv.log(msg, 'green')   uiv.sleep('1s')   uiv.getVar('!LASTCOMMANDOK')   uiv.setVar('n', 1)
 //       uiv.exit('reason')  -> end the run EARLY AS A SUCCESS (guard clauses;
 //       a failed check still uses throw new Error(...))
 // Long forms with options: uiv.findElements / findImages / ocr.findTexts
@@ -131,18 +131,17 @@ export const CAT_SCRIPT = `// Draw a smiling cat on excalidraw.com — precise s
 // line tools, freehand only where a wobble looks good (ears, nose, pupils,
 // smile, tail) — then greet with a REAL text element, typed with the text tool.
 // Trusted CDP input (uiv.browser.*), so Chrome/Edge only, no XModule needed.
-uiv.open('https://excalidraw.com/');
-
 // CDP input does not exist on Firefox — say so and point to the twin that
 // works there, then END THE RUN GREEN with uiv.exit: "wrong browser" is an
 // answered question, not a broken macro — and unlike a throw, uiv.exit
-// keeps the banner on screen. (!BROWSER is read after the first uiv
-// command on purpose: before it, no special variable is set yet.)
+// keeps the banner on screen. (Environment facts like !BROWSER are readable
+// from the first line, so the guard runs before anything else does.)
 if (uiv.getVar('!BROWSER') === 'firefox') {
   uiv.banner('This drawing demo uses trusted CDP input (uiv.browser.*), which only <b>Chrome and Edge</b> support. For Firefox there is an <b>XClick version</b>: "Draw a cat🐱 - XClick version" in the demo collection, folder Demo and QA Test Scripts > XModules (if the folder is missing: Settings > General > For Tech Support/QA > Restore Demo Macros (JavaScript)).', { seconds: 25 });
   uiv.exit('Firefox detected — this demo needs Chrome or Edge. Use "Draw a cat🐱 - XClick version" from Demo and QA Test Scripts > XModules instead.');
 }
 
+uiv.open('https://excalidraw.com/');
 uiv.banner('<b>Ui.Vision drawing demo</b> — this macro is not affiliated with or endorsed by Excalidraw.', { seconds: 10 });
 const c = uiv.$('css=canvas'); // auto-waits until the app has rendered
 const b = uiv.browser;
@@ -397,9 +396,10 @@ uiv.shot.viewport('AutoFillJS_page1');
 // "Next" button (same locator as the table macro uses)
 uiv.page.click('xpath=//*[@id="mG61Hd"]/div/div/div[3]/div/div/div/span/span');
 
-// page 2: uiv.page.type fills a field in ONE call — no click to focus needed
+// page 2: uiv.page.type fills a field in ONE call — no click to focus needed,
+// and multiline text is just \\n in the string
 uiv.page.type('xpath=//input[@type="text"]', 'This is a single line test...');
-uiv.run('type', 'xpath=//textarea', '...and this a multiline test:\\nLine2\\nLine3');
+uiv.page.type('xpath=//textarea', '...and this a multiline test:\\nLine2\\nLine3');
 uiv.shot.viewport('AutoFillJS_page2');
 uiv.page.click('xpath=//*[@id="mG61Hd"]/div/div/div[3]/div[1]/div[1]/div[2]/span/span');
 uiv.log('DemoAutofill (JS) completed!', '#shownotification');
@@ -421,13 +421,15 @@ uiv.log(\`Title check passed: \${title}\`, 'green');
     code: `// JS version of the DemoTabs macro — same flow, same tab numbering as
 // the classic one. A click that opens a new tab does NOT hand focus to it
 // (a dispatched click carries no user activation, so the tab opens in the
-// background), so switch explicitly with selectWindow. All primitives
-// target the ACTIVE tab and selectWindow activates the tab it selects, so
-// after each switch the whole API follows automatically.
+// background), so switch explicitly with uiv.tabs.select. All primitives
+// target the tab the script acts on, and every uiv.tabs.* call activates
+// and RETURNS the tab it lands on, so after each switch the whole API
+// follows automatically.
 //
-// tab=N counts from the tab the macro STARTED on: tab=1 is the first tab
-// to its right, tab=2 the second — the number does not depend on where the
-// previous command left off.
+// uiv.tabs indexes are ABSOLUTE (1..N, what the tab bar shows). The classic
+// macro counted RELATIVE to the start tab (tab=1 = first tab to its right) —
+// that is just startTabIndex + N here, so the flow and the numbers below
+// stay identical to the classic demo.
 uiv.open('https://ui.vision/demo/tabs');
 
 // Tab position comes from the uiv.tabs API, not a !variable: the classic
@@ -454,7 +456,7 @@ const assertTabRel = (want, where) => {
 
 // a dispatched click carries no user activation: Chrome opens the link's
 // tab in the BACKGROUND, Firefox's popup blocker eats it entirely — detect
-// that and open the link's href directly (the selectWindow calls below
+// that and open the link's href directly (the uiv.tabs.select calls below
 // address tabs absolutely, so both routes continue identically)
 const openLinkedTab = (linkText) => {
   const before = uiv.tabs.list().length;
@@ -467,59 +469,58 @@ const openLinkedTab = (linkText) => {
 };
 
 openLinkedTab('Open new web page in new browser tab');
-uiv.run('selectWindow', 'tab=1');
+uiv.tabs.select(startTabIndex + 1); // classic tab=1: first tab right of the start tab
 const t1 = uiv.eval('return document.title');
 if (!t1.includes('TAB1')) { throw new Error(\`expected TAB1, got: \${t1}\`); }
 logTabs('blue');
-assertTabRel(1, 'after selectWindow tab=1');
+assertTabRel(1, 'after tabs.select(start + 1)');
 uiv.page.type('id=sometext1', 'this is tab 1 (typed from JS)');
 
-// opened from TAB1 (the rightmost tab), so the new tab lands after it = tab=2
+// opened from TAB1 (the rightmost tab), so the new tab lands after it = start + 2
 openLinkedTab('Open yet another web page in a new browser tab');
-uiv.run('selectWindow', 'tab=2');
+uiv.tabs.select(startTabIndex + 2);
 const t2 = uiv.eval('return document.title');
 if (!t2.includes('TAB2')) { throw new Error(\`expected TAB2, got: \${t2}\`); }
 uiv.page.type('id=sometext2', 'And this is tab 2! (JS)');
 
-// back to TAB1 and close it — what was TAB2 then becomes tab=1
-uiv.run('selectWindow', 'tab=1');
+// back to TAB1 and close it — what was TAB2 then moves one place left
+uiv.tabs.select(startTabIndex + 1);
 uiv.page.type('id=sometext1', 'Now back in tab 1 - test done! (JS)');
-uiv.run('selectWindow', 'tab=close');
+uiv.tabs.close();
 uiv.sleep('1s');
 const t3 = uiv.eval('return document.title');
 if (!t3.includes('TAB2')) { throw new Error(\`expected TAB2 after close, got: \${t3}\`); }
 uiv.log(\`After close, now on: \${t3}\`);
 
-uiv.run('selectWindow', 'tab=1');
+uiv.tabs.select(startTabIndex + 1);
 const t4 = uiv.eval('return document.title');
-if (!t4.includes('TAB2')) { throw new Error(\`expected TAB2 via tab=1, got: \${t4}\`); }
+if (!t4.includes('TAB2')) { throw new Error(\`expected TAB2 via start + 1, got: \${t4}\`); }
 logTabs('green');
-assertTabRel(1, 'new tab=1 is the old TAB2');
+assertTabRel(1, 'the old TAB2 is now first right of the start tab');
 
-// tab=open always appends a new tab at the far RIGHT of the window and
-// switches to it — so each one lands exactly one place right of the previous
-uiv.run('selectWindow', 'tab=open', 'https://ui.vision');
-uiv.sleep('1s');
+// uiv.tabs.open always appends a new tab at the far RIGHT of the window,
+// switches to it and waits for it — each one lands one place right of the
+// previous (the classic tab=open, minus the sleep it needed)
+uiv.tabs.open('https://ui.vision');
 uiv.log(\`Opened new tab: \${uiv.eval('return document.title')}\`);
 const afterFirstOpen = tabAbs();
-uiv.run('selectWindow', 'tab=open', 'https://ocr.space');
-uiv.sleep('1s');
+uiv.tabs.open('https://ocr.space');
 uiv.log(\`Opened new tab: \${uiv.eval('return document.title')}\`);
 
 logTabs('brown');
 
 // Catching tab bugs is the whole point of these numbers, so both checks are
-// hard failures. First the invariant that defines tab=open — each one appends
+// hard failures. First the invariant that defines tabs.open — each one appends
 // exactly one tab further right:
 if (tabAbs() !== afterFirstOpen + 1) {
-  throw new Error(\`tab=open should append one tab to the right: was \${afterFirstOpen}, now \${tabAbs()}\`);
+  throw new Error(\`tabs.open should append one tab to the right: was \${afterFirstOpen}, now \${tabAbs()}\`);
 }
 
-// ...then the classic macro's last command, assert !current_tab_number_relative
-// = 3 (start tab, then TAB2, ui.vision, ocr.space). Like the classic macro this
-// assumes the run started in a window with no tabs to the RIGHT of the start
-// tab, since tab=open appends past them — if this is the only check that fails,
-// that is why.
+// ...then the classic macro's last assert: relative position 3 (start tab,
+// then TAB2, ui.vision, ocr.space). Like the classic macro this assumes the
+// run started in a window with no tabs to the RIGHT of the start tab, since
+// tabs.open appends past them — if this is the only check that fails, that
+// is why.
 assertTabRel(3, 'final');
 uiv.log('DemoTabs (JS) completed', 'green');
 `
@@ -589,13 +590,15 @@ uiv.shot.viewport('article2_just_viewport');
 // screenshot of a single ELEMENT, then OCR it to verify the content
 const titleShot = uiv.shot.element('xpath=//a[contains(normalize-space(.), "Blog")]', 'blogtitle');
 
-// the shot's file name feeds straight into the reader
+// the shot's file name feeds straight into the reader — no engine pin: this
+// read uses the engine configured in Settings > OCR. ({engine: 99}, the
+// XModule Local OCR, reads best when installed; {engine: 2}/{engine: 3} are
+// the cloud engines.)
 uiv.setVar('!OCRLANGUAGE', 'eng');
-uiv.setVar('!OCRENGINE', 98);
 const ocrResult = uiv.ocr.read({ image: titleShot });
 uiv.log(\`OCR Result = \${ocrResult}\`, 'blue');
 
-if (String(ocrResult).indexOf('RPA') !== -1) {
+if (String(ocrResult).includes('RPA')) {
   uiv.log('yes, screenshot taking and OCR worked', 'green');
 } else {
   throw new Error(\`OCR did not find "RPA" in the element screenshot: \${ocrResult}\`);
@@ -623,7 +626,7 @@ uiv.setVar('!TIMEOUT_WAIT', 15);
 
 // classic assertText -> read the text and check it yourself
 const intro = uiv.$('xpath=/html/body/header/center/p[2]').text;
-if (intro.indexOf('Use the select box to start the timer') === -1) {
+if (!intro.includes('Use the select box to start the timer')) {
   throw new Error(\`unexpected intro text: \${intro}\`);
 }
 
@@ -979,7 +982,7 @@ uiv.open('https://ui.vision/demo/executescript');
 
 // classic assertText / assertTitle -> read and throw
 const heading = uiv.$('xpath=//*[@id="content"]/div[2]/div/h2[1]').text;
-if (heading.indexOf('Input box to display some results') === -1) {
+if (!heading.includes('Input box to display some results')) {
   throw new Error(\`unexpected heading: \${heading}\`);
 }
 if (uiv.eval('return document.title') !== 'Selenium IDE executeScript Demo Page') {
@@ -988,7 +991,7 @@ if (uiv.eval('return document.title') !== 'Selenium IDE executeScript Demo Page'
 
 // classic sourceSearch: count occurrences in the page source
 const html = uiv.eval('return document.documentElement.outerHTML');
-if (html.indexOf('G-VJNCDYRXBP') === -1) {
+if (!html.includes('G-VJNCDYRXBP')) {
   throw new Error('Google Analytics ID is wrong!');
 }
 
@@ -1049,6 +1052,9 @@ uiv.log('DemoExecuteScript (JS) completed', 'green');
 // with TRUSTED input through the debugger API (uiv.browser.*) — no XModule
 // needed, but not available on Firefox. Use it when a site ignores the
 // synthetic events uiv.page.* sends.
+if (uiv.getVar('!BROWSER') === 'firefox') {
+  uiv.exit('This demo uses trusted CDP input (uiv.browser.*), which Firefox does not support — use Core/DemoAutofill instead (same form, DOM input, every browser).');
+}
 uiv.setVar('!TIMEOUT_PAGELOAD', 60);
 uiv.open('https://docs.google.com/forms/d/1cbI5dMRs0-t_IwNzPm6T3lAG_nPgsnJZEA-FEYVARxg/');
 
@@ -1061,10 +1067,12 @@ uiv.shot.viewport('AutoFillJS_page1');
 // "Next" button (same locator as the table macro uses)
 uiv.browser.click('xpath=//*[@id="mG61Hd"]/div/div/div[3]/div/div/div/span/span');
 
-// page 2: trusted keystrokes for the input, classic type for multiline
+// page 2: trusted keystrokes for both fields — in uiv.browser.type a \\n in
+// the string is a real ENTER keystroke, which is a new line inside a textarea
 uiv.browser.click('xpath=//input[@type="text"]');
 uiv.browser.type('This is a single line test...');
-uiv.run('type', 'xpath=//textarea', '...and this a multiline test:\\nLine2\\nLine3');
+uiv.browser.click('xpath=//textarea');
+uiv.browser.type('...and this a multiline test:\\nLine2\\nLine3');
 uiv.shot.viewport('AutoFillJS_page2');
 uiv.browser.click('xpath=//*[@id="mG61Hd"]/div/div/div[3]/div[1]/div[1]/div[2]/span/span');
 uiv.log('DemoAutofillChrome (JS) completed!', '#shownotification');
@@ -1086,6 +1094,9 @@ uiv.log(\`Title check passed: \${title}\`, 'green');
     code: `// uiv.browser.type: trusted keystrokes through the browser debugger
 // API (CDP), no XModule needed. It types into the web page only — unlike
 // uiv.desktop.type it cannot reach OS dialogs.
+if (uiv.getVar('!BROWSER') === 'firefox') {
+  uiv.exit('This demo uses trusted CDP input (uiv.browser.*), which Firefox does not support — Chrome/Edge only.');
+}
 const b = uiv.browser;
 
 uiv.open('https://www.wikipedia.org');
@@ -1105,7 +1116,7 @@ b.type('Robotic process automation\${KEY_ENTER}');
 const heading = uiv.$('css=#firstHeading').text;
 uiv.log(\`Landed on: \${uiv.eval('return document.title')}\`, 'blue');
 
-if (heading.toLowerCase().indexOf('robotic process automation') === -1) {
+if (!heading.toLowerCase().includes('robotic process automation')) {
   throw new Error(\`search did not land on the expected article: \${heading}\`);
 }
 uiv.log('DemoBrowserType (JS) completed', 'green');
@@ -1118,6 +1129,9 @@ uiv.log('DemoBrowserType (JS) completed', 'green');
     code: `// Dragging sliders with trusted CDP input, no XModule needed.
 // Dragging = press, move, release. uiv.browser.down holds the button, every
 // move while it is held drags, and uiv.browser.up releases at the end point.
+if (uiv.getVar('!BROWSER') === 'firefox') {
+  uiv.exit('This demo uses trusted CDP input (uiv.browser.*), which Firefox does not support — see XModules/DemoXMove for the same sliders with real OS input.');
+}
 const b = uiv.browser;
 
 uiv.open('https://ui.vision/demo/draw');
@@ -1174,13 +1188,17 @@ uiv.log('DemoBrowserDrag (JS) completed', 'green');
 // scale (side panel width, zoom, redesign — this demo shipped broken that way
 // once). Two corner keys anchor the whole key grid; every key is then a whole
 // number of grid steps away.
+if (uiv.getVar('!BROWSER') === 'firefox') {
+  uiv.exit('This demo uses trusted CDP input (uiv.browser.*), which Firefox does not support — Chrome/Edge only. (The same anchor+offset idiom works with real OS input too: uiv.desktop.click(uiv.offset(uiv.ocr.findText(anchor, {scope: "desktop"}), dx, dy)).)');
+}
 const b = uiv.browser;
 
 uiv.open('https://ui.vision/demo/draw');
 uiv.page.click('link=calculator');
 
+// no engine pin: these reads use the engine configured in Settings > OCR
+// ({engine: 99} — the XModule Local OCR — reads best when installed)
 uiv.setVar('!OCRLANGUAGE', 'eng');
-uiv.setVar('!OCRENGINE', 98);
 
 // Anchors: mc (top-left key) and R2 (bottom row, 3rd column). Both are
 // multi-char labels the OCR reads reliably — its neighbor R0 misreads as
@@ -1265,9 +1283,9 @@ uiv.log('DemoXType (JS) completed — check your download folder', 'green');
     // that runs for every user out of the box: no image files (nothing to
     // break on a different DPI or theme), no OCR, no coordinates, no AI —
     // and it works in Chrome, Edge AND Firefox, on Windows and macOS.
-    fileName: 'DemoDesktopConsole.js',
-    path: 'XModules/DemoDesktopConsole.js',
-    title: 'DemoDesktopConsole (JS)',
+    fileName: 'OpenBrowserDevTools.js',
+    path: 'XModules_Desktop/OpenBrowserDevTools.js',
+    title: 'OpenBrowserDevTools (JS)',
     code: `// Desktop automation that works for EVERY user: Chrome, Edge and Firefox, on
 // Windows and macOS (Linux too) — with no image files to match (nothing to
 // break on a different DPI or theme), no OCR, no screen coordinates, no AI.
@@ -1342,7 +1360,182 @@ uiv.log(\`Proof: real OS keystrokes drove the \${browser} DevTools console on \$
 // person watching what they are looking at and how to close it again.
 const closeChord = isMac ? 'Cmd+Opt+I' : 'Ctrl+Shift+I';
 uiv.banner('<b>Desktop automation demo done:</b> real OS keystrokes opened the DevTools console and typed a command into it — look at the console line it just ran, and at the tab title: "' + GREETING + '". The console stays open so you can see it; press ' + closeChord + ' (or F12) to close it.', { tone: 'green', seconds: 20 });
-uiv.log('DemoDesktopConsole completed', 'green');
+uiv.log('OpenBrowserDevTools completed', 'green');
+`
+  },
+  {
+    // NOT a port — born as JS. The side panel automating ITSELF, variant 1
+    // of 3: desktop OCR. Same task in _local_imagesearch and _ai.find, so
+    // the three desktop finders can be compared on identical work.
+    fileName: 'ClearSidebarLogViaGUI_local_ocr.js',
+    path: 'XModules_Desktop/ClearSidebarLogViaGUI_local_ocr.js',
+    title: 'ClearSidebarLogViaGUI_local_ocr (JS)',
+    code: `// The side panel automating ITSELF: find and press its own "Clear log"
+// button (bottom bar of the Data tab) with desktop OCR and real OS clicks.
+// Run it FROM the side panel, with the XModule installed.
+//
+// Normally IMPOSSIBLE: every desktop capture hides the extension UI behind
+// a solid "Desktop capture in progress" cover, precisely so that desktop
+// OCR/vision cannot match the macro source and log text the panel shows.
+// Storing false into !CAPTURE_HIDE_GUI switches the cover off for the rest
+// of this run — captures then show the real panel. Hiding stays the
+// default: the next run starts covered again.
+uiv.setVar('!CAPTURE_HIDE_GUI', false);
+
+const x = uiv.desktop;
+
+// With the cover off, the old danger is back: the words this macro hunts
+// are also in ITS OWN SOURCE, which sits in the editor on screen right now.
+// Build the search terms at runtime, so the source spells them differently
+// than the panel does.
+const CHAT = 'Ch' + 'at';                      // the 'AI Chat' tab
+const DATA = 'Da' + 'ta';                      // the tab this macro clicks
+const LOGS = 'Lo' + 'gs';                      // its Logs sub-tab
+const CLEAR_LOG = 'Cl' + 'ear ' + 'l' + 'og';  // the button
+
+// The sidebar tab row: 'Chat' next to 'Data' is the anchor PAIR. One word
+// alone is not safe — 'Chat' can sit in any other window on the screen (a
+// messenger, an editor showing this text), and anchoring there drags the
+// whole search into the wrong window. So: take every 'Chat' the screen
+// shows, try them from the RIGHT edge leftwards (the side panel docks
+// right), and accept only a candidate with a 'Data' tab in the same row —
+// a pair that only the panel's tab row has. (Desktop-scope OCR upgrades to
+// the XModule Local OCR by itself — the Javascript engine cannot read the
+// panel's small UI font.)
+const chats = uiv.ocr.findTexts(CHAT, { scope: 'desktop', timeout: 15 }).sort((a, b) => b.x - a.x);
+let chat = null;
+let dataTab = null;
+let AREA = null;
+for (let i = 0; i < chats.length && !dataTab; i++) {
+  const c = chats[i];
+  // the panel column around this candidate — reaching past the screen edge
+  // is fine, the capture clips it. Every later search stays inside it.
+  const a = { x: c.x - 260, y: Math.max(0, c.y - 40), width: 500, height: 1200 };
+  const d = uiv.ocr.findTexts(DATA, { scope: 'desktop', area: a, required: false, timeout: 2 })
+    .filter(m => Math.abs(m.y - c.y) < c.rect.height && m.x > c.x)
+    .sort((m1, m2) => m1.x - m2.x)[0];
+  if (d) { chat = c; dataTab = d; AREA = a; }
+}
+if (!dataTab) throw new Error('no AI Chat + Data tab pair found on screen — is the side panel fully visible, not covered by another window?');
+x.click(dataTab);
+
+// The Data tab replaces the editor — but its LOG LIST (when the Logs
+// sub-tab is active) prints this macro's own "Executing ..." lines, which
+// contain the same words. The real button is the BOTTOM-RIGHT occurrence
+// of its label: the bar sits below the list, the button at its right edge.
+// (Never click a matched word INSIDE the list — a log-entry click jumps
+// the panel back to the macro source.)
+const clearButton = (required) => {
+  const ms = uiv.ocr.findTexts(CLEAR_LOG, { scope: 'desktop', area: AREA, required: required, timeout: required ? 10 : 5 });
+  return ms.length ? ms.sort((a, b) => (b.x + b.y) - (a.x + a.y))[0] : null;
+};
+let btn = clearButton(false);
+if (!btn) {
+  // No button on screen: the Data tab remembered another sub-tab (Shots,
+  // CSV, Visual). Only NOW is searching the sub-tab word safe — without
+  // the log list, the topmost occurrence in the panel IS the sub-tab.
+  const logsTab = uiv.ocr.findTexts(LOGS, { scope: 'desktop', area: AREA, timeout: 10 }).sort((a, b) => a.y - b.y)[0];
+  x.click(logsTab);
+  btn = clearButton(true);
+}
+x.click(btn);
+
+// leave things as found: captures hide the panel again from here on.
+// The message lands in the log the macro just emptied — visible proof.
+uiv.setVar('!CAPTURE_HIDE_GUI', true);
+uiv.log('Log deleted — the side panel pressed its own Clear-log button (local OCR)', 'green');
+`
+  },
+  {
+    // Variant 2 of 3: local image search. Same task as _local_ocr — pixel
+    // anchors instead of text. Anchor images capture the panel at 100%
+    // display scaling; on another DPI re-capture them (save_element_image
+    // or uiv.shot.area).
+    fileName: 'ClearSidebarLogViaGUI_local_imagesearch.js',
+    path: 'XModules_Desktop/ClearSidebarLogViaGUI_local_imagesearch.js',
+    title: 'ClearSidebarLogViaGUI_local_imagesearch (JS)',
+    code: `// The side panel automating ITSELF: press its own "Clear log" button
+// (bottom bar of the Data tab), targeted with IMAGE SEARCH this time. Run
+// it FROM the side panel, with the XModule installed. See _local_ocr for
+// the cover story: !CAPTURE_HIDE_GUI=false makes desktop captures show the
+// panel.
+//
+// Unlike the OCR variant, images need no word tricks: the editor shows this
+// SOURCE as text, and text never pixel-matches a screenshot of a button.
+// The price is DPI sensitivity — the anchors are 100%-scaling captures.
+uiv.setVar('!CAPTURE_HIDE_GUI', false);
+
+const x = uiv.desktop;
+
+// the Data tab in the sidebar tab row — the image shows the INACTIVE look,
+// so no match usually means the Data tab is already the active one
+const dataTab = uiv.findImages('sidebar_datatab_dpi_96.png', { scope: 'desktop', minScore: 0.75, required: false });
+if (dataTab.length) x.click(dataTab[0]);
+
+// The Clear-log button sits in the bar below the log list. If it is not on
+// screen, the Data tab remembered another sub-tab (Shots, CSV, Visual) —
+// then the sub-tab bar is visible and shows the INACTIVE Logs sub-tab,
+// which is exactly what its anchor image pictures.
+let btn = uiv.findImages('sidebar_clearlog_dpi_96.png', { scope: 'desktop', minScore: 0.75, required: false, timeout: 5 });
+if (!btn.length) {
+  x.click(uiv.findImage('sidebar_logstab_dpi_96.png', { scope: 'desktop', minScore: 0.75 }));
+  btn = uiv.findImages('sidebar_clearlog_dpi_96.png', { scope: 'desktop', minScore: 0.75 });
+}
+x.click(btn[0]);
+
+// leave things as found: captures hide the panel again from here on.
+// The message lands in the log the macro just emptied — visible proof.
+uiv.setVar('!CAPTURE_HIDE_GUI', true);
+uiv.log('Log deleted — the side panel pressed its own Clear-log button (image search)', 'green');
+`
+  },
+  {
+    // Variant 3 of 3: the model as the finder. Same task as _local_ocr —
+    // uiv.ai.find points at the targets, no OCR wordlists and no image
+    // files to maintain; each call is billable.
+    fileName: 'ClearSidebarLogViaGUI_ai.find.js',
+    path: 'XModules_Desktop/ClearSidebarLogViaGUI_ai.find.js',
+    title: 'ClearSidebarLogViaGUI_ai.find (JS)',
+    code: `// The side panel automating ITSELF: press its own "Clear log" button
+// (bottom bar of the Data tab), located by the AI vision finder. Run it
+// FROM the side panel, with the XModule installed (the clicks are real OS
+// input). See _local_ocr for the cover story: !CAPTURE_HIDE_GUI=false
+// makes desktop captures show the panel.
+uiv.setVar('!CAPTURE_HIDE_GUI', false);
+
+const x = uiv.desktop;
+
+// ai.find does not auto-wait, and the panel has no DOM a script could wait
+// on — give each click a moment to render before the next screenshot. The
+// prompts describe targets by PLACE (tab row, bottom bar): this macro's own
+// source is on screen too until the Data tab hides the editor, and a bare
+// "find Data" could point at these very words.
+const find = (what) => {
+  const m = uiv.ai.find(what, { scope: 'desktop' });
+  uiv.log(what + ' => ' + m.x + ',' + m.y, 'blue');
+  return m;
+};
+
+x.click(find('In the Ui.Vision side panel, the "Data" tab in the tab row at the very top, right of the "AI Chat" tab'));
+uiv.sleep('1s');
+
+// The button only exists while the Logs sub-tab is active; when the Data
+// tab remembered another sub-tab, open Logs first. The failed find is one
+// extra model call, but only on that path.
+let btn;
+try {
+  btn = find('The "Clear log" button in the bar at the bottom right of the Ui.Vision side panel, below the log list');
+} catch (e) {
+  x.click(find('The "Logs" sub-tab in the second tab row of the Ui.Vision side panel'));
+  uiv.sleep('1s');
+  btn = find('The "Clear log" button in the bar at the bottom right of the Ui.Vision side panel, below the log list');
+}
+x.click(btn);
+
+// leave things as found: captures hide the panel again from here on.
+// The message lands in the log the macro just emptied — visible proof.
+uiv.setVar('!CAPTURE_HIDE_GUI', true);
+uiv.log('Log deleted — the side panel pressed its own Clear-log button (ai.find)', 'green');
 `
   },
   {
@@ -1435,103 +1628,127 @@ uiv.log(\`Calculator app launched (\${os}: \${calculator})\`, 'green');
 `
   },
   {
-    fileName: 'DemoVisualUITest.js',
-    path: 'XModules/DemoVisualUITest.js',
-    title: 'DemoVisualUITest (JS)',
-    code: `// Port of Classic/XModules/DemoVisualUITest.
-// Responsive-design testing: resize the window, then check what is visible.
-//
-// visualAssert and visualSearch both disappear into the finders:
-//   visualAssert file   -> uiv.findImage(file)  — auto-waits, THROWS if absent
-//   visualSearch file   -> uiv.findImages(file, {required: false}).length
-// which is the whole point of the finder contract: "find it or fail" and
-// "count them" are the same call with one option.
-const shot = (name, minScore) => uiv.findImage(name, minScore ? { minScore: minScore } : undefined);
-
-// setWindowSize drives the BROWSER window, not the page — legacy bridge
-uiv.run('setWindowSize', '1024x768');
-uiv.open('https://ui.vision/');
-
-// desktop layout: the wide logo and the share buttons must be there
-shot('uitest_logo_wide_dpi_96.png', 0.7);
-shot('uitest_share_dpi_96.png', 0.7);
-uiv.log('Desktop layout OK: wide logo and share buttons found', 'green');
-
-// --- resize to an iPhone 6 viewport -----------------------------------------
-uiv.run('setWindowSize', '375x768');
-
-shot('uitest_logo_mobile_dpi_96.png');
-shot('uitest_hamburger_dpi_96.png');
-uiv.log('Mobile layout OK: mobile logo and hamburger menu found', 'green');
-
-// The share buttons must NOT show on mobile. The page is loaded by now, so
-// drop the timeout — otherwise this waits the full !TIMEOUT_WAIT to prove a
-// negative, on every run.
-const shares = uiv.findImages('uitest_share_dpi_96.png', { minScore: 0.7, required: false, timeout: 2 });
-if (shares.length > 0) {
-  throw new Error(\`Share buttons should NOT show on mobile phones — found \${shares.length}\`);
-}
-uiv.log('Share buttons correctly hidden on mobile', 'green');
-
-uiv.run('setWindowSize', '1024x768');
-uiv.log('DemoVisualUITest (JS) completed', 'green');
-`
-  },
-  {
-    fileName: 'DemoXClickTextRelative.js',
-    path: 'XModules/DemoXClickTextRelative.js',
-    title: 'DemoXClickTextRelative (JS)',
-    code: `// Port of Classic/XModules/DemoXClickTextRelative.
-// Same calculator as DemoOffsetClick, but clicked with real OS input.
-//
-// The "text#R8,-14" relative-target syntax stays on the legacy bridge: uiv.ocr.findText
-// locates text, but clicking a fixed OFFSET from that text is what the
-// *TextRelative commands add, and there is no finder concept for it.
+    fileName: 'Right-click context menu.js',
+    path: 'XModules_Desktop/Right-click context menu.js',
+    title: 'Right-click context menu (JS)',
+    code: `// Save a web page through the browser's RIGHT-CLICK context menu and the OS
+// save dialog. Both are NATIVE UI outside the page DOM — no page command can
+// reach them, so everything after the right-click is desktop-tier (XModule)
+// work: real OS input plus desktop-scope OCR.
 const x = uiv.desktop;
 
-uiv.open('https://ui.vision/demo/draw');
-uiv.page.click('link=calculator');
+uiv.open('https://ui.vision');
 
-uiv.setVar('!OCRLANGUAGE', 'eng');
-uiv.setVar('!OCRENGINE', 98);
+// The browser window must be IN FRONT: a browser-scope OS click is aimed at
+// the window's screen position, so any window covering that spot gets the
+// click instead. bringBrowserToForeground raises the play tab's window, but
+// no browser API may steal the foreground from ANOTHER APP (the OS forbids
+// it) — a real OS click may, so click a visible piece of the PAGE itself:
+// the desktop-scope finder only returns what is actually on screen, and the
+// tallest match is the page's big heading, never the same words rendered
+// small in some other window.
+uiv.run('bringBrowserToForeground');
+uiv.sleep('500ms'); // settle: let the window reach the foreground
+const onScreen = uiv.ocr.findTexts('Open-Sourc*', {scope: 'desktop', required: false, timeout: 5});
+if (!onScreen.length) {
+  throw new Error('The ui.vision page is not visible on screen — this demo drives the browser with real OS input, so its window must not be covered by another app.');
+}
+x.click(onScreen.sort((a, b) => b.rect.height - a.rect.height)[0]);
 
-// 8 x 8888 =
-uiv.run('XClickTextRelative', 'mc#R8,-14');    // 8
-uiv.run('XClickTextRelative', 'mc#R30,-14');   // x
-uiv.run('XClickTextRelative', 'mc#R8,-14');    // 8
-
-// The last click left its position in !OCRX/!OCRY. Read them ONCE into JS
-// variables: every uiv call resets those result variables, so re-reading them
-// later in the loop would give whatever the previous click happened to set.
-const keyX = Number(uiv.getVar('!OCRX'));
-const keyY = Number(uiv.getVar('!OCRY'));
-for (let i = 0; i < 3; i++) {
-  x.click(keyX, keyY);   // plain screen coordinates, no scope tag needed
+// LANGUAGE-INDEPENDENT MENU TARGETING: the menu wording follows the browser's
+// UI language — read the locale and look up the save entry's most distinctive
+// word (wildcards absorb OCR misreads, 'speichem' happens).
+const lang = String(uiv.eval('return navigator.language') || 'en').toLowerCase().slice(0, 2);
+const SAVE_WORD = {
+  en: 'Save', de: 'speich*', fr: 'enregistr*', es: 'Guardar*', it: 'Salva*',
+  pt: 'Salvar*', nl: 'opslaan*', pl: 'Zapisz*', ru: 'Сохранить*',
+  zh: '另存*', ja: '名前*', ko: '저장*'
+}[lang];
+if (!SAVE_WORD) {
+  throw new Error('No save-menu wording known for UI language "' + lang + '" — add it to the SAVE_WORD table at the top of this macro.');
 }
 
-uiv.run('XClickTextRelative', 'mc#R30,-41');   // =
+// Non-Latin scripts need the matching OCR language, or the reader cannot see
+// the menu text at all (the default language covers Latin scripts only).
+// 另存 is written identically in simplified and traditional Chinese, so one
+// Chinese OCR language covers both.
+const OCR_LANG = { ru: 'rus', ja: 'jpn', ko: 'kor', zh: 'chs' }[lang];
+if (OCR_LANG) { uiv.setVar('!OCRLANGUAGE', OCR_LANG); }
 
-// read the display with the XModule's local OCR engine
-uiv.setVar('!OCRENGINE', 99);
-uiv.run('OCRExtractbyTextRelative', 'mc#R22,16H12W21', 's');
-const shown = String(uiv.getVar('s', ''));
-uiv.log(\`Extracted string (Calculator result) is "\${shown}"\`, 'blue');
+// scan with the configured engine, then once more with the XModule Local OCR
+// ({engine: 99}) — explicitly chosen here: the better reader for native UI
+const scan = () => {
+  let m = uiv.ocr.findTexts(SAVE_WORD, {scope: 'desktop', required: false, timeout: 3});
+  if (!m.length) {
+    try { m = uiv.ocr.findTexts(SAVE_WORD, {scope: 'desktop', required: false, timeout: 3, engine: 99}); } catch (e) { /* no XModule Local OCR */ }
+  }
+  return m;
+};
 
-// OCR of a 7-segment display picks up stray marks — keep only the digits
-const digits = Number(shown.replace(/[^0-9]/g, ''));
+// A browser-scope desktop click takes VIEWPORT coordinates, fronts the browser
+// and aims the OS click at that page position. (100, 300) is the page's left
+// margin, so the right-click opens the page (or image) context menu — both
+// contain the save-page entry. The left-click first guarantees the browser
+// window has the focus, even when the user was just working in a different app.
+x.click(100, 300, {scope: 'browser'});
 
-if (digits === 71104) {
-  uiv.log(\`8 x 8888 is \${digits}, Calculator works!\`, 'green');
-} else {
-  throw new Error(\`Calculator result is wrong: read "\${shown}" -> \${digits}, expected 71104\`);
+// BEFORE opening the menu: remember where the word already appears on screen
+// (another window may show it — a docs page, a chat, an editor). Those are
+// background noise; the menu entry will be the match that is NEW.
+const noise = scan();
+
+x.click(100, 300, {scope: 'browser', button: 'right'});
+uiv.sleep('1s'); // settle: let the native menu paint before the OCR pass
+
+// "new" = not in the noise baseline, i.e. it appeared with the menu/dialog
+const isNew = (h, extra) => !noise.concat(extra || []).some((n) => Math.abs(n.x - h.x) < 10 && Math.abs(n.y - h.y) < 10);
+
+const item = scan().find((h) => isNew(h));
+if (!item) {
+  x.type('\${KEY_ESC}'); // close the menu again — leave a clean screen behind
+  throw new Error('The save-page entry ("' + SAVE_WORD + '") was not found in the context menu by OCR — try the XModule Local OCR (Settings > OCR), or adjust SAVE_WORD for your language.');
 }
+x.click(item);
+uiv.sleep('2s'); // settle: the OS save dialog takes a moment to appear
+
+// POSITIVE proof that the dialog is up BEFORE typing blindly into it — but
+// NOT by reading the file-name field: it shows its text small and SELECTED
+// (white on highlight), which local OCR regularly cannot read, and a failed
+// read there would abort a save that actually worked. The dialog's TITLE
+// carries the same word as the menu entry ("Speichern unter", "Save As") in
+// large text instead: the menu is gone by now, so a fresh match somewhere
+// ELSE than the menu entry means the dialog is open.
+const dialog = scan().find((h) => isNew(h, [item]));
+if (!dialog) {
+  x.type('\${KEY_ESC}');
+  throw new Error('The save dialog did not open — the menu click missed the save entry.');
+}
+
+// The dialog opens with the suggested file name SELECTED — typing replaces
+// it. Native dialogs have no DOM: these are blind keystrokes. The name
+// carries a timestamp so it is unique EVERY run: a reused name (an earlier
+// "abc.htm") makes Windows ask "replace it?", and confirming that dialog
+// blind is exactly the kind of flakiness a demo must not have.
+const d = new Date();
+const pad = (n) => (n < 10 ? '0' + n : String(n));
+const saveName = 'page_' + d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + '_' + pad(d.getHours()) + '-' + pad(d.getMinutes()) + '-' + pad(d.getSeconds()) + '.htm';
+x.type(saveName);
+x.type('\${KEY_ENTER}');
+
+// ...and now the dialog must be GONE — its title would still be on screen
+// otherwise. A macro must fail loudly when the goal was not reached.
+uiv.sleep('2s'); // settle: let the dialog close
+if (scan().some((h) => isNew(h, [item]))) {
+  throw new Error('The save dialog is still open — the file name entry or the save click did not work');
+}
+uiv.log('Page saved as ' + saveName + ' via the native right-click menu — check the browser download folder', 'green');
 `
   },
   {
-    fileName: 'Prompt_ParseHTML.js',
-    path: 'LLM AI Commands/Prompt_ParseHTML.js',
-    title: 'Prompt_ParseHTML (JS)',
-    code: `// Port of Classic/LLM AI Commands/Prompt_ParseHTML.
+    fileName: 'ai.ask_ParseHTML.js',
+    path: 'LLM AI Commands/ai.ask_ParseHTML.js',
+    title: 'ai.ask_ParseHTML (JS)',
+    code: `// Port of Classic/LLM AI Commands/ai.ask_ParseHTML.
 // Send page content to the LLM, then turn its answer into a CSV.
 //
 // uiv.ai.ask is one round trip to the configured model. Everything
@@ -1540,16 +1757,13 @@ if (digits === 71104) {
 // executeScript_Sandbox blocks with the code squeezed into one cell.
 uiv.open('https://forum.ui.vision/');
 
-// grab the page source and strip the parts the model does not need. Sending
-// less costs less and answers better.
-const html = uiv.eval(\`
-  var s = document.body.innerHTML;
-  s = s.replace(/<script[\\\\s\\\\S]*?<\\\\/script>/gi, '');
-  s = s.replace(/<style[\\\\s\\\\S]*?<\\\\/style>/gi, '');
-  s = s.replace(/<!--[\\\\s\\\\S]*?-->/g, '');
-  return s.replace(/\\\\s+/g, ' ').slice(0, 20000);
-\`);
-uiv.log(\`Extracted \${html.length} characters of HTML\`, 'brown');
+// Grab the page CONTENT via the finder, not uiv.eval: this forum ships a
+// strict Content-Security-Policy that blocks executeScript-based page JS on
+// Firefox — match.text comes through the content script and is CSP-immune.
+// Sending rendered text instead of raw HTML also costs less and answers
+// better.
+const html = uiv.$('css=body').text.replace(/\\s+/g, ' ').slice(0, 20000);
+uiv.log(\`Extracted \${html.length} characters of page text\`, 'brown');
 
 // uiv.ai.ask passes the prompt through untouched — no \${...} in the page
 // source can be mistaken for a variable reference
@@ -1574,10 +1788,10 @@ uiv.log(\`Saved \${rows.length} titles to first5forumposts.csv\`, 'green');
 `
   },
   {
-    fileName: 'Prompt_CompareImages.js',
-    path: 'LLM AI Commands/Prompt_CompareImages.js',
-    title: 'Prompt_CompareImages (JS)',
-    code: `// Port of Classic/LLM AI Commands/Prompt_CompareImages.
+    fileName: 'ai.ask_CompareImages.js',
+    path: 'LLM AI Commands/ai.ask_CompareImages.js',
+    title: 'ai.ask_CompareImages (JS)',
+    code: `// Port of Classic/LLM AI Commands/ai.ask_CompareImages.
 // Ask the model whether two images match. The classic macro's \`verify\`
 // commands become plain checks — and unlike verify, a failure here can say
 // what the model actually replied.
@@ -1589,7 +1803,7 @@ const QUESTION = 'Are both images the same? Answer only true or false.';
 // Test 1: the same image twice -> must be true
 const same = ask('canvas_wyoming_dpi_96.png', 'canvas_wyoming_dpi_96.png', QUESTION);
 uiv.log(\`Test1: Are the images the same? \${same}\`, 'green');
-if (same.indexOf('true') === -1) {
+if (!same.includes('true')) {
   throw new Error(\`Test1 failed: identical images should compare as true, model said "\${same}"\`);
 }
 
@@ -1599,11 +1813,11 @@ if (same.indexOf('true') === -1) {
 // smaller models answer with true — the demo must not fail on that.
 const different = ask('canvas_wyoming_dpi_96.png', 'canvas_hydepark_dpi_96.png', QUESTION);
 uiv.log(\`Test2: Are the images the same? \${different}\`, 'green');
-if (different.indexOf('false') === -1) {
+if (!different.includes('false')) {
   throw new Error(\`Test2 failed: different images should compare as false, model said "\${different}"\`);
 }
 
-uiv.log('Prompt_CompareImages (JS) completed — both comparisons as expected', 'green');
+uiv.log('ai.ask_CompareImages (JS) completed — both comparisons as expected', 'green');
 `
   },
   {
@@ -1628,9 +1842,9 @@ const TASK = [
 const result = String(uiv.ai.computerUse(TASK));
 uiv.log(\`Computer Use Result = \${result}\`, 'blue');
 
-if (result.lastIndexOf('SUCCESS') >= 0) {
+if (result.includes('SUCCESS')) {
   uiv.log('All worked fine', 'green');
-} else if (result.lastIndexOf('ERROR') >= 0) {
+} else if (result.includes('ERROR')) {
   throw new Error(\`the computer-use agent reported an error: \${result}\`);
 } else {
   // the classic macro only echoed a warning here; a script should fail, since
@@ -1640,25 +1854,26 @@ if (result.lastIndexOf('SUCCESS') >= 0) {
 `
   },
   {
-    fileName: 'ScreenXY_SearchForum.js',
-    path: 'LLM AI Commands/ScreenXY_SearchForum.js',
-    title: 'ScreenXY_SearchForum (JS)',
-    code: `// Port of Classic/LLM AI Commands/ScreenXY_SearchForum.
+    fileName: 'ai.find_SearchForum.js',
+    path: 'LLM AI Commands/ai.find_SearchForum.js',
+    title: 'ai.find_SearchForum (JS)',
+    code: `// Port of Classic/LLM AI Commands/ai.find_SearchForum.
 // uiv.ai.find asks the model WHERE something is on screen: a vision finder
 // powered by an LLM rather than template matching, for when there is no image
 // to match and no DOM to query. It returns a match, DPI already accounted for.
 // DOM clicks act on the model's point, so this runs in every browser; typing
 // goes through uiv.page.type on the focused search field.
-uiv.run('XDesktopAutomation', 'false');
 uiv.open('https://forum.ocr.space/');
 
 // uiv.ai.find RETURNS the match, so the !AI1/!AI2 dance the classic macro
 // needed is gone — reading those in a script now throws, because the next
 // uiv call overwrites them.
-// input tiers directly and the scope guard applies. It throws by itself when
-// the model gives no usable coordinates, so there is nothing to check here.
+// {scope: 'browser'} pins THIS call to the viewport — the per-call form of
+// the classic global XDesktopAutomation toggle — so the demo behaves the same
+// even when desktop mode is switched on in the config. ai.find throws by
+// itself when the model gives no usable coordinates, so nothing to check here.
 const locate = (what) => {
-  const point = uiv.ai.find(what);
+  const point = uiv.ai.find(what, { scope: 'browser' });
   uiv.log(\`\${what} => \${point.x},\${point.y}\`, 'blue');
   return point;
 };
@@ -1668,162 +1883,12 @@ uiv.page.click(searchIcon);
 
 // fill the search box the click revealed — the forum searches as you type,
 // so no ENTER key is needed (key codes are uiv.browser.type territory)
-uiv.page.type('css=input[type="search"], input[name="term"], input', 'aiprompt');
+uiv.page.type('css=input[type="search"], input[name="term"], input', 'V10');
 
 const firstResult = locate('Find the first search result (blue text)');
 uiv.page.click(firstResult);
 
-uiv.log('ScreenXY_SearchForum (JS) completed', 'green');
-`
-  },
-  {
-    fileName: 'CU_PressClear_Desktop.js',
-    path: 'LLM AI Commands/CU_PressClear_Desktop.js',
-    title: 'CU_PressClear_Desktop (JS)',
-    code: `// Port of Classic/LLM AI Commands/CU_PressClear_Desktop.
-// The computer-use agent driving the Ui.Vision IDE itself, at DESKTOP scope —
-// so it can reach the app window, not just the web page.
-uiv.run('XDesktopAutomation', 'true');
-
-const TASK = [
-  'Automate the Ui.Vision IDE.',
-  'Find and press the Clear button.',
-  'To find it you may need to select the Logs tab first.',
-  'Finish your reply with SUCCESS or ERROR.'
-].join(' ');
-
-const result = String(uiv.ai.computerUse(TASK));
-uiv.log(\`Computer Use Result = \${result}\`, 'blue');
-
-if (result.lastIndexOf('SUCCESS') >= 0) {
-  uiv.log('All worked fine', 'green');
-} else if (result.lastIndexOf('ERROR') >= 0) {
-  throw new Error(\`the computer-use agent reported an error: \${result}\`);
-} else {
-  // no verdict means the run cannot be called a success — the classic macro
-  // only echoed a warning here and still finished green
-  throw new Error(\`no SUCCESS/ERROR verdict in the agent's reply: \${result}\`);
-}
-`
-  },
-  {
-    fileName: 'ScreenXY_PressClear_Desktop.js',
-    path: 'LLM AI Commands/ScreenXY_PressClear_Desktop.js',
-    title: 'ScreenXY_PressClear_Desktop (JS)',
-    code: `// Port of Classic/LLM AI Commands/ScreenXY_PressClear_Desktop.
-// uiv.ai.find at DESKTOP scope: ask the model where something is on the
-// whole screen, then click it with real OS input.
-const x = uiv.desktop;
-
-uiv.run('XDesktopAutomation', 'true');
-
-// uiv.ai.find returns the match with the screen scaling already applied, so
-// there is no !AI1/!AI2 to race against
-// uiv.ai.find returns a MATCH, like any other finder — so it feeds the
-// input tiers directly and the scope guard applies. It throws by itself when
-// the model gives no usable coordinates, so there is nothing to check here.
-const locate = (what) => {
-  const point = uiv.ai.find(what);
-  uiv.log(\`\${what} => \${point.x},\${point.y}\`, 'blue');
-  return point;
-};
-
-const logsTab = locate('Look for the Ui.Vision IDE. In it, find the Logs tab.');
-x.click(logsTab);
-uiv.log('Logs tab selected', 'green');
-
-const clearButton = locate('Look for the Ui.Vision IDE. In it, find the Clear button');
-x.click(clearButton);
-uiv.log(\`Clear button pressed at X,Y: \${clearButton.x},\${clearButton.y}\`, 'green');
-`
-  },
-  {
-    fileName: 'Sub_XDesktopAutomation_Area.js',
-    path: 'XModules_Desktop/Sub/Sub_XDesktopAutomation_Area.js',
-    title: 'Sub_XDesktopAutomation_Area (JS)',
-    code: `// Port of Classic/XModules_Desktop/Sub/Sub_XDesktopAutomation_Area.
-//
-// Narrows the desktop vision search to the Ui.Vision window, using two anchor
-// images as opposite corners. The classic version needs four
-// executeScript_Sandbox commands just to do arithmetic on !imagex/!imagey/
-// !imagewidth/!imageheight — here the finder returns a match object with a
-// rect, so the maths is one line each.
-//
-// Include it with:
-//   // @include Demo and QA Test Scripts/XModules_Desktop/Sub/Sub_XDesktopAutomation_Area.js
-
-function limitSearchToIdeWindow () {
-  const DESKTOP = { scope: 'desktop', minScore: 0.4 };
-
-  const topLeft = uiv.findImage('desktop_area_topleft3_dpi_96.png', DESKTOP);
-  const x1 = topLeft.x - topLeft.rect.width / 1.5;
-  const y1 = topLeft.y + topLeft.rect.height / 2;
-
-  const bottomRight = uiv.findImage('desktop_area_bottomright_dpi_96.png', DESKTOP);
-  const x2 = bottomRight.x + bottomRight.rect.width / 2;
-  const y2 = bottomRight.y - bottomRight.rect.height / 2;
-
-  uiv.log(\`x1=\${x1}, y1=\${y1}, x2=\${x2}, y2=\${y2}\`, 'blue');
-  uiv.run('visionLimitSearchArea', \`area=\${x1},\${y1},\${x2},\${y2}\`);
-
-  return { x1: x1, y1: y1, x2: x2, y2: y2 };
-}
-
-// runnable on its own: opening this file and pressing Play checks that both
-// anchor images still match the current IDE window
-if (uiv.main) {
-  uiv.run('XDesktopAutomation', 'true');
-  limitSearchToIdeWindow();
-  uiv.log('Sub_XDesktopAutomation_Area self-test: both anchors found', 'green');
-}
-`
-  },
-  {
-    fileName: 'DemoXDesktopAutomation.js',
-    path: 'XModules_Desktop/DemoXDesktopAutomation.js',
-    title: 'DemoXDesktopAutomation (JS)',
-    code: `// Port of Classic/XModules_Desktop/DemoXDesktopAutomation.
-// Desktop image search: Ui.Vision automating its own IDE window.
-//
-// The search area comes from a shared function rather than a \`run\` of another
-// macro — the subroutine is spliced in before this compiles:
-// @include Demo and QA Test Scripts/XModules_Desktop/Sub/Sub_XDesktopAutomation_Area.js
-
-const x = uiv.desktop;
-const DESKTOP = { scope: 'desktop', minScore: 0.5 };
-
-uiv.log('Running DESKTOP image search now', '#shownotification');
-uiv.run('XDesktopAutomation', 'true');
-
-limitSearchToIdeWindow();
-
-// The Logs tab looks different depending on whether it is already selected.
-// The classic macro toggles !errorignore around the first attempt and then
-// inspects !statusOK; in JS this is just "try one, fall back to the other" —
-// and the fallback cannot accidentally swallow a LATER error, which is the
-// risk with a global ignore flag.
-const clickLogsTab = () => {
-  const white = uiv.findImages('desktop_logstab_white_dpi_96.png', { scope: 'desktop', minScore: 0.5, required: false });
-  if (white.length) {
-    x.click(white[0]);
-    return 'white';
-  }
-  x.click(uiv.findImage('desktop_logstab_grey_dpi_96.png', { scope: 'desktop', minScore: 0.5 }));
-  return 'grey';
-};
-uiv.log(\`Logs tab clicked (\${clickLogsTab()} variant)\`, 'blue');
-
-x.click(uiv.findImage('desktop_clearbutton_dpi_96.png', DESKTOP));
-uiv.log('Log cleared by macro (clear button pressed)', 'blue');
-
-// open the other tabs in turn
-x.click(uiv.findImage('desktop_vartab_dpi_96.png', DESKTOP));
-x.click(uiv.findImage('desktop_scrtab_dpi_96.png', { scope: 'desktop', minScore: 0.4 }));
-x.click(uiv.findImage('desktop_vitab_dpi_96.png', { scope: 'desktop', minScore: 0.4 }));
-
-// classic visualAssert -> the finder throws if it is not there
-uiv.findImage('desktop_check_v_tab_dpi_96.png', DESKTOP);
-uiv.log('DemoXDesktopAutomation (JS) completed', 'green');
+uiv.log('ai.find_SearchForum (JS) completed', 'green');
 `
   },
   {
@@ -1837,6 +1902,9 @@ uiv.log('DemoXDesktopAutomation (JS) completed', 'green');
 // A drag is press, move, release: uiv.browser.down holds the button, every
 // uiv.browser.move while it is held drags, and .up releases — the corner
 // coordinates are two numbers in a loop.
+if (uiv.getVar('!BROWSER') === 'firefox') {
+  uiv.exit('This demo uses trusted CDP input (uiv.browser.*), which Firefox does not support — see XModules/DemoXClick for the same drawing with real OS input.');
+}
 const t = uiv.browser;
 const FIND = {};
 const find = (name, minScore) => uiv.findImage(name, minScore ? Object.assign({ minScore: minScore }, FIND) : FIND);
@@ -2116,14 +2184,13 @@ uiv.log('Cat + greeting drawn with real OS input: ' + counts.ellipse + ' ellipse
 // The computer-use agent plays a game and reports the outcome. The classic
 // if/elseif chain over its reply becomes a lookup, so adding an outcome is one
 // line instead of another branch.
-uiv.log('This demo macro uses an external website which is not affiliated with Ui.Vision.', 'blue');
-
 uiv.run('XDesktopAutomation', 'false');
+uiv.open('https://ui.vision/demo/tictactoe');
 uiv.run('bringBrowserToForeground');
-uiv.open('https://www.gamepix.com/play/tic-tac-toe-html5');
 
 const TASK = [
-  'You are playing a game of tic tac toe against the computer.',
+  'You are playing a game of tic tac toe against the computer. You are X and move first.',
+  'If a difficulty choice is shown, select "easy" before playing.',
   'Your goal is to win. Play until the game is over.',
   'Finish your reply with exactly one of GAMEWIN, GAMELOST, GAMEDRAW or ERROR.'
 ].join(' ');
@@ -2137,11 +2204,11 @@ const OUTCOMES = [
   { keyword: 'GAMEDRAW', message: 'A draw', color: 'blue' }
 ];
 
-const outcome = OUTCOMES.find(o => result.lastIndexOf(o.keyword) >= 0);
+const outcome = OUTCOMES.find(o => result.includes(o.keyword));
 
 if (outcome) {
   uiv.log(outcome.message, outcome.color);
-} else if (result.lastIndexOf('ERROR') >= 0) {
+} else if (result.includes('ERROR')) {
   throw new Error(\`the computer-use agent reported an error: \${result}\`);
 } else {
   throw new Error(\`no game outcome in the agent's reply: \${result}\`);
@@ -2157,8 +2224,8 @@ if (outcome) {
 uiv.log('This demo macro uses an external website which is not affiliated with Ui.Vision.', 'blue');
 
 uiv.run('XDesktopAutomation', 'false');
-uiv.run('bringBrowserToForeground');
 uiv.open('https://www.theonlinecalculator.com/');
+uiv.run('bringBrowserToForeground');
 
 const TASK = [
   'Use the calculator to compute 8 + 9 by clicking the buttons.',
@@ -2169,9 +2236,9 @@ const TASK = [
 const result = String(uiv.ai.computerUse(TASK));
 uiv.log(\`Computer Use Result = \${result}\`, 'blue');
 
-if (result.lastIndexOf('SUCCESS') >= 0) {
+if (result.includes('SUCCESS')) {
   uiv.log('All worked fine', 'green');
-} else if (result.lastIndexOf('ERROR') >= 0) {
+} else if (result.includes('ERROR')) {
   throw new Error(\`the computer-use agent reported an error: \${result}\`);
 } else {
   throw new Error(\`no SUCCESS/ERROR verdict in the agent's reply: \${result}\`);
@@ -2180,7 +2247,7 @@ if (result.lastIndexOf('SUCCESS') >= 0) {
   },
   {
     fileName: 'DemoPDFTest_with_OCR.js',
-    path: 'XModules/DemoPDFTest_with_OCR.js',
+    path: 'Browser Vision (Chrome, Edge)/DemoPDFTest_with_OCR.js',
     title: 'DemoPDFTest_with_OCR (JS)',
     code: `// Port of Classic/XModules/DemoPDFTest_with_OCR.
 // A PDF in the browser's viewer has NO DOM at all — no elements, no text
@@ -2188,8 +2255,12 @@ if (result.lastIndexOf('SUCCESS') >= 0) {
 // image search, OCR and real mouse/keyboard input.
 const x = uiv.desktop;
 
+// Not a debugger-API issue: Firefox renders PDFs in its built-in pdf.js
+// viewer, a PRIVILEGED page extensions cannot attach a content script to —
+// even the open command cannot connect to that tab (verified: Error #210).
+// Wrong browser is an answered question, not a broken macro: end green.
 if (uiv.getVar('!BROWSER') === 'firefox') {
-  throw new Error('This macro works only in Chrome and Edge — Firefox does not support the debugger API used here');
+  uiv.exit('This demo works in Chrome and Edge only — Firefox shows PDFs in its privileged built-in viewer, which browser extensions cannot reach at all.');
 }
 
 uiv.run('setWindowSize', '800x700');
@@ -2201,9 +2272,11 @@ uiv.open('http://download.ui.vision/demo/pdf-test.pdf');
 uiv.findImage('pdftest_salesquote.png', { minScore: 0.35 });
 
 // Option 2: text search. ocr.findTexts COUNTS without throwing, so the failure
-// message can say how many it saw.
+// message can say how many it saw. Cloud engine 2, never 1 — engines 2 and 3
+// read far better and both auto-detect the text language (this demo needs an
+// OCR.Space key either way; see https://ocr.space/ocrapi#ocrengine2).
 uiv.setVar('!OCRLANGUAGE', 'ENG');
-uiv.setVar('!OCRENGINE', 1);
+uiv.setVar('!OCRENGINE', 2);
 uiv.setVar('!OCRSCALE', true);
 
 const matches = uiv.ocr.findTexts('sales quote', { required: false });
@@ -2213,39 +2286,53 @@ if (matches.length === 0) {
 }
 
 // --- extract the quote number and check it ----------------------------------
-// A RELATIVE image: the green anchor is searched for, and the pink box marks
-// the region to read. OCRExtractRelative is the ONE thing the finders cannot
-// express — they locate text, they do not read an area — so it stays on the
-// legacy bridge.
-uiv.run('XClickRelative', 'getquotenumber_dpi_96_relative.png@0.30');
-uiv.run('OCRExtractRelative', 'getquotenumber_dpi_96_relative.png@0.30', 'q');
+// The classic macro used a RELATIVE image here (green anchor, pink read
+// area) through the legacy XClickRelative/OCRExtractRelative bridge. In JS
+// the same thing is COMPOSED, with no image file to maintain: the
+// 'sales quote' heading match IS the anchor, and the read area is the line
+// directly below it — every size in units the anchor itself provides, so
+// the region scales with the rendering. uiv.ocr.read({area}) replaces
+// OCRExtractRelative: finders locate text, read() reads a region.
+const heading = matches[0];
 
-const raw = String(uiv.getVar('q', ''));
-uiv.log(\`Extracted text in pink area: >\${raw}<\`, 'blue');
+// an OS click into that line gives the PDF viewer focus for later scrolling
+// — what the classic XClickRelative click did
+x.click(uiv.offset(heading, 0, Math.round(1.4 * heading.rect.height)));
+
+const raw = String(uiv.ocr.read({
+  area: {
+    x: heading.rect.left,
+    y: heading.rect.top + heading.rect.height,
+    width: Math.round(1.1 * heading.rect.width),
+    height: Math.round(1.3 * heading.rect.height)
+  }
+}));
+uiv.log(\`Extracted text below the heading: >\${raw}<\`, 'blue');
 
 // the classic macro needs two executeScript commands to strip whitespace and
 // test for the substring
 const quote = raw.replace(/[\\\\s]/g, '');
 uiv.log(\`Without spaces and line breaks, quote number: >\${quote}<\`, 'green');
 
-if (quote.lastIndexOf('135') === -1) {
+if (!quote.includes('135')) {
   throw new Error(\`Wrong quote number. Extracted text was >\${raw}<\`);
 }
 uiv.log('Quote number OK', 'green');
 
 // --- scroll the PDF and follow a link ---------------------------------------
-// The X commands need the RealUser XModule. Click the document first so the
-// viewer has keyboard focus — "ocr=" targets let the classic commands find
-// text themselves.
+// Real OS clicks aimed by OCR text — the composed form of the classic
+// "XClick | ocr=..." target: the finder locates the words, uiv.desktop.click
+// turns the match into an OS click at that page position. Click the document
+// first so the viewer has keyboard focus.
 uiv.sleep(500);
-uiv.run('XClick', 'ocr=sales quote');
+x.click(uiv.ocr.findText('sales quote'));
 
 // page down: the shortcut differs per platform
 x.type(uiv.getVar('!OS') === 'mac' ? '\${KEY_CMD+KEY_DOWN}' : '\${KEY_PAGE_DOWN}\${KEY_PAGE_DOWN}');
 
 // the PDF scrolls asynchronously and there is no DOM event to wait on
 uiv.sleep(500);
-uiv.run('XClick', 'ocr=website');
+x.click(uiv.ocr.findText('website'));
 
 // the link leaves the PDF for a normal page, so the DOM is back — classic
 // assertElementPresent is just a finder call that throws

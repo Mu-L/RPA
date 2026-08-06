@@ -11,12 +11,6 @@ const preinstallMacros = {
       "Description": ""
     },
     {
-      "Command": "echo",
-      "Target": "This demo macro uses an external website which is not affiliated with Ui.Vision.",
-      "Value": "blue",
-      "Description": ""
-    },
-    {
       "Command": "bringBrowserToForeground",
       "Target": "true",
       "Value": "",
@@ -24,13 +18,13 @@ const preinstallMacros = {
     },
     {
       "Command": "open",
-      "Target": "https://www.gamepix.com/play/tic-tac-toe-html5",
+      "Target": "https://ui.vision/demo/tictactoe",
       "Value": "",
       "Description": ""
     },
     {
       "Command": "aiComputerUse",
-      "Target": "You are playing a game of tic tac toe against the computer.\n\nYou are Player 1. \n\nIf you win, end with message 'GAMEWIN'. \n\nIf you lose, end with 'GAMELOST'. \n\nIf the game draws, end with 'GAMEDRAW'. \n\nIf you encounter invalid game state or cannot make a move, end with 'ERROR'. \n\nTool use instructions:  Do not use mouse move commands, only click commands.",
+      "Target": "You are playing a game of tic tac toe against the computer.\n\nYou are X and move first. \n\nIf a difficulty choice is shown, select 'easy' before playing. \n\nIf you win, end with message 'GAMEWIN'. \n\nIf you lose, end with 'GAMELOST'. \n\nIf the game draws, end with 'GAMEDRAW'. \n\nIf you encounter invalid game state or cannot make a move, end with 'ERROR'. \n\nTool use instructions:  Do not use mouse move commands, only click commands.",
       "Value": "s",
       "Description": ""
     },
@@ -268,73 +262,8 @@ const preinstallMacros = {
     }
   ]
   },
-    "LLM AI Commands/CU_PressClear_Desktop": {
-    "CreationDate": "2024-12-03",
-    "Commands":  [
-    {
-      "Command": "XDesktopAutomation",
-      "Target": "true",
-      "Value": "",
-      "Description": ""
-    },
-    {
-      "Command": "aiComputerUse",
-      "Target": "Automate the Ui.Vision IDE. \n\nFind and press the Clear button. \n\nTo save time, do not use mouse move. Only do CLICK.\n\nTry only once. It is successful, if log tab is less than half full by the time you take a screenshot.\n\nEnd with SUCCESS, or ERROR if problems occur.",
-      "Value": "s",
-      "Description": ""
-    },
-    {
-      "Command": "echo",
-      "Target": "Computer Use Result = ${s}",
-      "Value": "blue",
-      "Description": ""
-    },
-    {
-      "Command": "if",
-      "Target": "${s}.lastIndexOf(\"SUCCESS\") >= 0",
-      "Value": "",
-      "Description": "Parse the LLM output for SUCCESS substring"
-    },
-    {
-      "Command": "echo",
-      "Target": "All worked fine",
-      "Value": "green",
-      "Description": ""
-    },
-    {
-      "Command": "elseif",
-      "Target": "${s}.lastIndexOf(\"ERROR\") >= 0",
-      "Value": "",
-      "Description": ""
-    },
-    {
-      "Command": "echo",
-      "Target": "An error happened",
-      "Value": "brown",
-      "Description": ""
-    },
-    {
-      "Command": "else",
-      "Target": "",
-      "Value": "",
-      "Description": ""
-    },
-    {
-      "Command": "echo",
-      "Target": "This state should not happen. String should contain one of the keywords.",
-      "Value": "orange",
-      "Description": ""
-    },
-    {
-      "Command": "end",
-      "Target": "",
-      "Value": "",
-      "Description": ""
-    }
-  ]
-  },
   
-  "LLM AI Commands/Prompt_CompareImages": {
+  "LLM AI Commands/ai.ask_CompareImages": {
     "CreationDate": "2024-11-11",
     "Commands":  [
     {
@@ -375,7 +304,7 @@ const preinstallMacros = {
     }
   ]
   },
-   "LLM AI Commands/Prompt_ParseHTML": {
+   "LLM AI Commands/ai.ask_ParseHTML": {
     "CreationDate": "2024-11-22",
     "Commands":   [
     {
@@ -422,7 +351,7 @@ const preinstallMacros = {
     }
   ]
   },
-  "LLM AI Commands/ScreenXY_SearchForum": {
+  "LLM AI Commands/ai.find_SearchForum": {
     "CreationDate": "2024-11-22",
     "Commands":  [
     {
@@ -493,77 +422,6 @@ const preinstallMacros = {
     }
   ]
   },
-  "LLM AI Commands/ScreenXY_PressClear_Desktop": {
-    "CreationDate": "2024-11-22",
-    "Commands":  [
-    {
-      "Command": "XDesktopAutomation",
-      "Target": "true",
-      "Value": "",
-      "Description": ""
-    },
-    {
-      "Command": "aiScreenXY",
-      "Target": "Look for the Ui.Vision IDE. In it, find the Logs tab.",
-      "Value": "s",
-      "Description": ""
-    },
-    {
-      "Command": "echo",
-      "Target": "Original Result=${s}",
-      "Value": "brown",
-      "Description": ""
-    },
-    {
-      "Command": "echo",
-      "Target": "Screen-scaling adjusted X,Y coordinates: ${!ai1},${!ai2}",
-      "Value": "blue",
-      "Description": ""
-    },
-    {
-      "Command": "XClick",
-      "Target": "${!ai1},${!ai2}",
-      "Value": "",
-      "Description": "Click on Logs tab. Goal is to select it if it is not selected. Then the Clear button appears. We need this button for the next step."
-    },
-    {
-      "Command": "echo",
-      "Target": "Logs tab selected",
-      "Value": "green",
-      "Description": ""
-    },
-    {
-      "Command": "aiScreenXY",
-      "Target": "Look for the Ui.Vision IDE. In it, find the Clear button",
-      "Value": "s",
-      "Description": ""
-    },
-    {
-      "Command": "echo",
-      "Target": "Original Result=${s}",
-      "Value": "brown",
-      "Description": ""
-    },
-    {
-      "Command": "echo",
-      "Target": "Screen-scaling adjusted X,Y coordinates: ${!ai1},${!ai2}",
-      "Value": "blue",
-      "Description": ""
-    },
-    {
-      "Command": "XClick",
-      "Target": "${!ai1},${!ai2}",
-      "Value": "",
-      "Description": "Click the Clear button."
-    },
-    {
-      "Command": "echo",
-      "Target": "Clear button pressed at X,Y: ${!ai1},${!ai2}",
-      "Value": "green",
-      "Description": ""
-    }
-  ]
-  },  
   "Core/DemoAutofill": {
     "CreationDate": "2020-05-28",
     "Commands":  [
@@ -2361,257 +2219,6 @@ const preinstallMacros = {
       }
     ]
   },
-   "XModules/DemoXClickTextRelative": 
-  {
-    "CreationDate": "2024-06-08",
-    "Commands":  [
-    {
-      "Command": "store",
-      "Target": "fast",
-      "Value": "!replayspeed",
-      "Description": ""
-    },
-    {
-      "Command": "open",
-      "Target": "https://ui.vision/demo/draw",
-      "Value": "",
-      "Description": ""
-    },
-    {
-      "Command": "click",
-      "Target": "linkText=calculator",
-      "Value": "",
-      "Description": "The calculator website is NOT affiliated with Ui.Vision."
-    },
-    {
-      "Command": "pause",
-      "Target": "1000",
-      "Value": "",
-      "Description": ""
-    },
-    {
-      "Command": "store",
-      "Target": "eng",
-      "Value": "!ocrlanguage",
-      "Description": "English OCR"
-    },
-    {
-      "Command": "store",
-      "Target": "98",
-      "Value": "!ocrengine",
-      "Description": "use Javascript OCR engine"
-    },
-    {
-      "Command": "XClickTextRelative",
-      "Target": "mc#R8,-14",
-      "Value": "",
-      "Description": "Click 8. Anchor button has the text \"mc\""
-    },
-    {
-      "Command": "XClickTextRelative",
-      "Target": "mc#R30,-14",
-      "Value": "",
-      "Description": "times"
-    },
-    {
-      "Command": "XClickTextRelative",
-      "Target": "mc#R8,-14",
-      "Value": "",
-      "Description": "Click 8"
-    },
-    {
-      "Command": "XClick",
-      "Target": "${!ocrX},${!ocrY}",
-      "Value": "",
-      "Description": "Repeat click on last found xclick position (here: press 8 again)"
-    },
-    {
-      "Command": "XClick",
-      "Target": "${!ocrX},${!ocrY}",
-      "Value": "",
-      "Description": ""
-    },
-    {
-      "Command": "XClick",
-      "Target": "${!ocrX},${!ocrY}",
-      "Value": "",
-      "Description": ""
-    },
-    {
-      "Command": "XClickTextRelative",
-      "Target": "mc#R30,-41",
-      "Value": "",
-      "Description": "= sign "
-    },
-    {
-      "Command": "store",
-      "Target": "99",
-      "Value": "!ocrengine",
-      "Description": "Switch to XModule OCR. It is better with numbers."
-    },
-    {
-      "Command": "OCRExtractbyTextRelative",
-      "Target": "mc#R22,16H12W21",
-      "Value": "s",
-      "Description": "Get text (numbers) from calculator display"
-    },
-    {
-      "Command": "echo",
-      "Target": "Extracted string (Calculator result) is \"${s}\"",
-      "Value": "blue",
-      "Description": "String maybe still contains line breaks like /r/n from the OCR"
-    },
-    {
-      "Command": "executeScript_Sandbox",
-      "Target": "var inputString=${s};\nvar numericString = '';\nfor (var i = 0; i < inputString.length; i++) {\n    var char = inputString.charAt(i);\n    if (char >= '0' && char <= '9') {\n        numericString += char;\n    }\n}\nreturn numericString;",
-      "Value": "i",
-      "Description": "Remove all non numeric chars. Use method without regular expressions for string replacement, so it works in Firefox, too."
-    },
-    {
-      "Command": "if",
-      "Target": "${i} == 71104",
-      "Value": "",
-      "Description": "8 x 888 = 7104"
-    },
-    {
-      "Command": "echo",
-      "Target": "8 x 8888 is ${i}, Calculator works!",
-      "Value": "green",
-      "Description": ""
-    },
-    {
-      "Command": "else",
-      "Target": "",
-      "Value": "",
-      "Description": ""
-    },
-    {
-      "Command": "echo",
-      "Target": "Wrong result: i = ${i}",
-      "Value": "blue",
-      "Description": ""
-    },
-    {
-      "Command": "throwError",
-      "Target": "Calculator result is wrong",
-      "Value": "",
-      "Description": "Trigger an error if the value is not correct. (Useful for automated testing)"
-    },
-    {
-      "Command": "end",
-      "Target": "",
-      "Value": "",
-      "Description": ""
-    }
-  ]
-  },
-
-  "XModules/DemoVisualUITest":
-  {
-    "CreationDate": "2022-2-21",
-    "Commands":  [
-      {
-        "Command": "open",
-        "Target": "https://ui.vision/",
-        "Value": ""
-      },
-      {
-        "Command": "setWindowSize",
-        "Target": "1024x768",
-        "Value": ""
-      },
-      {
-        "Command": "visualAssert",
-        "Target": "uitest_logo_wide_dpi_96.png@0.70",
-        "Value": ""
-      },
-      {
-        "Command": "visualAssert",
-        "Target": "uitest_share_dpi_96.png@0.70",
-        "Value": ""
-      },
-      {
-        "Command": "comment",
-        "Target": "Resize to iPhone6 screen size",
-        "Value": ""
-      },
-      {
-        "Command": "setWindowSize",
-        "Target": "375x768",
-        "Value": ""
-      },
-      {
-        "Command": "visualAssert",
-        "Target": "uitest_logo_mobile_dpi_96.png",
-        "Value": ""
-      },
-      {
-        "Command": "comment",
-        "Target": "visualAssert stops the macro if the image is not found on the page",
-        "Value": ""
-      },
-      {
-        "Command": "visualAssert",
-        "Target": "uitest_hamburger_dpi_96.png",
-        "Value": ""
-      },
-      {
-        "Command": "comment",
-        "Target": "Check that Share buttons do not show",
-        "Value": ""
-      },
-      {
-        "Command": "comment",
-        "Target": "At this point, page is surely loaded => reduce wait for (normally missing) image",
-        "Value": ""
-      },
-      {
-        "Command": "store",
-        "Target": "2",
-        "Value": "!timeout_wait"
-      },
-      {
-        "Command": "visualSearch",
-        "Target": "uitest_share_dpi_96.png@0.70",
-        "Value": "count"
-      },
-      {
-        "Command": "if",
-        "Target": "${count} > 0",
-        "Value": ""
-      },
-      {
-        "Command": "throwError",
-        "Target": "Share buttons should NOT show on mobile phones",
-        "Value": ""
-      },
-      {
-        "Command": "end",
-        "Target": "",
-        "Value": ""
-      },
-      {
-        "Command": "comment",
-        "Target": "Restore default wait (not really needed here, since macro stops now anyway)",
-        "Value": ""
-      },
-      {
-        "Command": "store",
-        "Target": "10",
-        "Value": "!timeout_wait"
-      },
-      {
-        "Command": "comment",
-        "Target": "Done, enlarge browser again",
-        "Value": ""
-      },
-      {
-        "Command": "setWindowSize",
-        "Target": "1024x768",
-        "Value": ""
-      }
-    ]
-  },
   "XModules/DemoXType":	
   {
     "CreationDate": "2019-01-28",
@@ -3218,119 +2825,6 @@ const preinstallMacros = {
     ]
    },
 
-  "XModules_Desktop/DemoXDesktopAutomation":
-  {
-    "CreationDate": "2024-02-13",
-    "Commands": [
-      {
-        "Command": "store",
-        "Target": "fast",
-        "Value": "!replayspeed",
-		"Description": ""
-      },
-      {
-        "Command": "echo",
-        "Target": "Running DESKTOP image search now",
-        "Value": "#shownotification",
-		"Description": ""
-      },
-      {
-        "Command": "XDesktopAutomation",
-        "Target": "true",
-        "Value": "",
-		"Description": "Look at the desktop, not only the browser"
-      },
-      {
-        "Command": "run",
-        "Target": "Sub/Sub_XDesktopAutomation_Area",
-        "Value": "",
-		"Description": "In the sub, we limit the search area for better performance"
-      },
-      {
-        "Command": "store",
-        "Target": "true",
-        "Value": "!errorignore",
-		"Description": "Log button can be greyed out - try both options. "
-      },
-      {
-        "Command": "XClick",
-        "Target": "desktop_logstab_white_dpi_96.png@0.5",
-        "Value": "",
-		"Description": "Log button can have white or grey background"
-      },
-      {
-        "Command": "store",
-        "Target": "false",
-        "Value": "!errorignore",
-		"Description": ""
-      },
-      {
-        "Command": "if",
-        "Target": "${!statusOK} == false",
-        "Value": "",
-		"Description": ""
-      },
-      {
-        "Command": "XClick",
-        "Target": "desktop_logstab_grey_dpi_96.png@0.5",
-        "Value": "",
-		"Description": "Now try the GREY button image"
-      },
-    {
-        "Command": "store",
-        "Target": "true",
-        "Value": "!statusOK",
-		"Description": "Reset !statusOK value. It does NOT reset by itself during macro run."
-      },
-      {
-        "Command": "end",
-        "Target": "",
-        "Value": "",
-		"Description": ""
-      },
-      {
-        "Command": "XClick",
-        "Target": "desktop_clearbutton_dpi_96.png@0.5",
-        "Value": "",
-		"Description": "Press Clear button"
-      },
-      {
-        "Command": "echo",
-        "Target": "Log cleared by macro (clear button pressed)",
-        "Value": "blue",
-		"Description": ""
-      },
-      {
-        "Command": "comment",
-        "Target": "Now search and open other tabs",
-        "Value": ""
-      },
-      {
-        "Command": "XClick",
-        "Target": "desktop_vartab_dpi_96.png@0.5",
-        "Value": "",
-		"Description": "Open Variable tab"
-      },
-      {
-        "Command": "XClick",
-        "Target": "desktop_scrtab_dpi_96.png@0.4",
-        "Value": "",
-		"Description": ""
-      },
-      {
-        "Command": "XClick",
-        "Target": "desktop_vitab_dpi_96.png@0.4",
-        "Value": "",
-		"Description": ""
-      },
-      {
-        "Command": "visualAssert",
-        "Target": "desktop_check_v_tab_dpi_96.png@0.5",
-        "Value": "",
-		"Description": "Make sure that we are on the correct tab. For that, we search for the icons." 
- }
-    ]
-  },
   "XModules_Desktop/DemoAutomateChromeDevTools":
   {
     "CreationDate": "2024-04-28",
@@ -3511,72 +3005,6 @@ const preinstallMacros = {
       "Description": ""
     }
   ]
-  },
-  "XModules_Desktop/Sub/Sub_XDesktopAutomation_Area":
-  {
-    "CreationDate": "2021-04-29",
-    "Commands": [
-      {
-        "Command": "comment",
-        "Target": "SUBROUTINE used by DemoXDesktopAutomation",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "comment",
-        "Target": "It uses two anchor images to define the new search area",
-        "Value": "",
-        "Description": ""
-      },
-      {
-        "Command": "visualAssert",
-        "Target": "desktop_area_topleft3_dpi_96.png@0.4",
-        "Value": "",
-        "Description": "Find image to calculate the top left x/y for visionLimitSearchArea "
-      },
-      {
-        "Command": "executeScript_Sandbox",
-        "Target": "return ${!imagex}-${!imagewidth}/1.5",
-        "Value": "x1",
-        "Description": "New limited area top left corner = bottom left corner of the anchor image. We use image x/y and image width/height to calculate this value. For X we use /1.5 instead of /2 in the formular below to make the area a bit wider."
-      },
-      {
-        "Command": "executeScript_Sandbox",
-        "Target": "return ${!imagey}+${!imageheight}/2",
-        "Value": "y1",
-        "Description": ""
-      },
-      {
-        "Command": "visualAssert",
-        "Target": "desktop_area_bottomright_dpi_96.png@0.4",
-        "Value": "",
-        "Description": "Find image to calculate the bottom right x/y for visionLimitSearchArea."
-      },
-      {
-        "Command": "executeScript_Sandbox",
-        "Target": "return ${!imagex}+${!imagewidth}/2",
-        "Value": "x2",
-        "Description": "New Search Area bottom right corner = top right corner of the anchor image."
-      },
-      {
-        "Command": "executeScript_Sandbox",
-        "Target": "return ${!imagey}-${!imageheight}/2",
-        "Value": "y2",
-        "Description": ""
-      },
-      {
-        "Command": "echo",
-        "Target": "x1=${x1}, y1=${y1}, x2=${x2}, y2=${y2}",
-        "Value": "blue",
-        "Description": ""
-      },
-      {
-        "Command": "visionLimitSearchArea",
-        "Target": "area=${x1},${y1},${x2},${y2}",
-        "Value": "",
-        "Description": ""
-      }
-    ]
   },
  
   "Core/Sub/Sub_DemoCsvRead_FillForm":

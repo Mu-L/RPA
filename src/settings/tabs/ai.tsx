@@ -434,9 +434,13 @@ class AITab extends React.Component<AiTabProps, AiTabAppState> {
             </div>
             <div className="ai-settings-item">
               <span className="label-text">2. Bridge token:</span>
+              {/* plain text on purpose: a localhost pairing token, not a
+                  secret — masking it only makes pairing harder to verify.
+                  Narrow: the token is ~10 chars */}
               <Input
-                type="password"
-                placeholder="The token printed by the setup command"
+                type="text"
+                style={{ width: '160px' }}
+                placeholder="Pairing token"
                 value={this.props.config.mcpBridgeToken || ''}
                 onChange={(e) => onConfigChange('mcpBridgeToken', e.target.value)}
               />

@@ -778,14 +778,45 @@ function preparePlayTabIPC(
       }
     )
     .then(({ tab, hasOpenedUrl, shouldSkipCommandRun }: PreparePlayTabIntermediateResult) => {
+      // For an open-like command that has NOT yet navigated, this heart beat
+      // only decides WHERE the open runs: a live content script gets the
+      // command, a dead one means we load the URL directly. A ZOMBIE page —
+      // registered in the ipc cache but too blocked/throttled to ever answer
+      // (real case: the play tab still held the previous demo's game, a heavy
+      // canvas loop in a background tab) — used to eat the ENTIRE page-load
+      // budget here, so open died with #230 without ever navigating. The old
+      // page now gets CS_ALIVE_TIMEOUT to prove it is alive; after a
+      // navigation (hasOpenedUrl) the heart beat IS the page-load wait and
+      // keeps the full budget.
+      const capForOpen = isOpenLikeCommand(command) && !hasOpenedUrl
       return callPlayTab({
         command: 'HEART_BEAT',
         args: '',
-        tabIpcTimeout: getTimeoutPageLoad(command)
-      }).then(() => {
-        stopCountDown()
-        return { tab, hasOpenedUrl, shouldSkipCommandRun }
-      })
+        tabIpcTimeout: capForOpen ? CS_ALIVE_TIMEOUT : getTimeoutPageLoad(command)
+      }).then(
+        () => {
+          stopCountDown()
+          return { tab, hasOpenedUrl, shouldSkipCommandRun }
+        },
+        (e: Error) => {
+          if (!capForOpen || !/timeout/.test(String(e && e.message))) {
+            return Promise.reject(e)
+          }
+          // zombie old page: load the URL directly (same recovery the
+          // dead-content-script path takes), then wait for the NEW page with
+          // the full page-load budget
+          return openNewUrlInPlayTab(command, startCountDown).then((r) =>
+            callPlayTab({
+              command: 'HEART_BEAT',
+              args: '',
+              tabIpcTimeout: getTimeoutPageLoad(command)
+            }).then(() => {
+              stopCountDown()
+              return r
+            })
+          )
+        }
+      )
     })
 }
 

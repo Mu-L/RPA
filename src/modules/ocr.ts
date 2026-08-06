@@ -21,8 +21,37 @@ import { convertOcrLanguageToTesseractLanguage } from '@/services/ocr/languages'
 import { OcrHighlightType } from '@/services/ocr/types'
 import { readableSize } from '@/services/storage/flat/storage'
 import { captureImage } from './helper'
+import { getXFile } from '@/services/xmodules/xfile'
 
-export const getOcrResponse = ({
+// --- XModule Local OCR availability probe -----------------------------------
+// AUTHORING-time helper, deliberately NOT used to switch engines at runtime:
+// the engine a macro runs with is exactly the configured/requested one, so
+// runs stay predictable. The probe feeds the environment info the AI macro
+// author sees, so it can SUGGEST the best reader ({engine: 99} when the
+// XModule is installed) while the macro is being written. Cached: a hit for
+// the session, a miss for 60s (a freshly installed XModule is picked up
+// without a reload).
+let xmoduleOcrProbe: { available: boolean; at: number } | null = null
+export const isXModuleOcrAvailable = (): Promise<boolean> => {
+  if (xmoduleOcrProbe && (xmoduleOcrProbe.available || Date.now() - xmoduleOcrProbe.at < 60000)) {
+    return Promise.resolve(xmoduleOcrProbe.available)
+  }
+  return Promise.race([
+    getXFile()
+      .getVersion()
+      .then((info: any) => !!(info && info.installed)),
+    delay(() => false, 3000)
+  ])
+    .catch(() => false)
+    .then((available: boolean) => {
+      xmoduleOcrProbe = { available, at: Date.now() }
+      return available
+    })
+}
+
+let loggedDesktopEngine = false
+
+export const getOcrResponse = async ({
   searchArea,
   storedImageRect,
   ocrApiTimeout,
@@ -36,6 +65,29 @@ export const getOcrResponse = ({
   imageDataUrl
 }) => {
   const ocrScale = scale
+
+  // DESKTOP SCOPE ONLY: the Javascript OCR (98) is never the right default
+  // here — a desktop read already requires the XModule (the capture itself
+  // comes from it), and the XModule's Local OCR reads native UI far better,
+  // while the JS engine loses window titles, menu entries and selected
+  // (white-on-highlight) text. So when the caller did not ask for a specific
+  // engine and the configured one is 98, desktop reads use 99. Browser-scope
+  // reads are untouched: they run with exactly the configured engine.
+  // Local OCR ships for Windows and macOS only — on Linux the JS engine
+  // stays the default (the availability probe alone would not catch that,
+  // since the XModule itself does exist there).
+  const localOcrOs = !/linux/i.test(window.navigator.userAgent) || /(windows|mac os|macintosh)/i.test(window.navigator.userAgent)
+  if (isDesktop && localOcrOs && Number(engine) === 98 && Number(store.getState().config.ocrEngine) === 98) {
+    if (await isXModuleOcrAvailable()) {
+      if (!loggedDesktopEngine) {
+        loggedDesktopEngine = true
+        store.dispatch(
+          act.addLog('info', 'Desktop OCR: using the XModule Local OCR (engine 99) — it reads native UI far better than the Javascript OCR. Pass {engine: 98} to force the Javascript engine.')
+        )
+      }
+      engine = 99
+    }
+  }
 
   return new Promise((resolve, reject) => {
     // Note: must make sure `getOcrCommandCounter` is called with args before this (currently it's in `initPlayer`)

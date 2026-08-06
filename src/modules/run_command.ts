@@ -10,7 +10,6 @@ import { getPixel, isFirefox, isLocator, scaleRect, subImage } from '@/common/do
 import { decryptIfNeeded } from '@/common/encrypt'
 import { evaluateScript } from '@/common/eval'
 import csIpc from '@/common/ipc/ipc_cs'
-import FileSaver from '@/common/lib/file_saver'
 import log from '@/common/log'
 import { renderLog } from '@/common/macro_log'
 import { getPlayer } from '@/common/player'
@@ -81,6 +80,8 @@ import { xCmdCounter } from './counters'
 import {
   hideDownloadBar,
   withVisualHighlightHidden,
+  withDesktopCaptureCover,
+  shouldHideGuiDuringCapture,
   getSidePanelWidth,
   replaceEscapedChar,
   captureImage,
@@ -128,7 +129,7 @@ export const askBackgroundToRunCommand = async ({
   const prepare: Promise<{
     useClipboard: boolean
     clipboard?: string
-  }> = !useClipboard ? Promise.resolve({ useClipboard: false }) : Promise.resolve({ useClipboard: true, clipboard: clipboard.get() })
+  }> = !useClipboard ? Promise.resolve({ useClipboard: false }) : clipboard.get().then((text) => ({ useClipboard: true, clipboard: text }))
 
   if (Ext.isFirefox()) {
     switch (command.cmd) {
@@ -286,6 +287,89 @@ const useAnthropicVision = (): string | null => {
   return null
 }
 
+// chrome.debugger.attach — the engine behind BClick/BMove/BType — checks EVERY
+// frame of the target tab: one iframe injected by ANOTHER extension (password
+// manager, coupon/cookie tool ...) rejects the whole attach with "Cannot
+// access a chrome-extension:// URL of different extension". The same family of
+// errors fires when the play tab itself drifted onto a browser-internal or
+// foreign-extension page. Both used to kill the run with that raw Chrome text
+// (regression: AI-generated bahn.de macro died at uiv.browser.click).
+const CDP_INPUT_BLOCKED_RE = /cannot access|cannot attach/i
+
+const isWebPageUrl = (url?: string) => /^(https?|file):/i.test(url || '')
+
+// Plain left single click replayed as DOM events in the top frame — the one
+// case where a DOM stand-in is faithful enough to keep the run alive when the
+// debugger attach is vetoed. Mirrors script_runner's pageDomClickAt (shadow
+// root + same-origin frame descent), minus the stale-match scroll logic.
+function domFallbackClickAt (x: number, y: number) {
+  try {
+    var win: any = window
+    var el: any = win.document.elementFromPoint(x, y)
+    for (;;) {
+      while (el && el.shadowRoot) {
+        var inner = el.shadowRoot.elementFromPoint(x, y)
+        if (!inner || inner === el) break
+        el = inner
+      }
+      var tag = el && el.tagName ? el.tagName.toLowerCase() : ''
+      if ((tag === 'iframe' || tag === 'frame') && el.contentDocument) {
+        var fr = el.getBoundingClientRect()
+        x = x - fr.left - (el.clientLeft || 0)
+        y = y - fr.top - (el.clientTop || 0)
+        win = el.contentWindow || win
+        el = el.contentDocument.elementFromPoint(x, y)
+        continue
+      }
+      break
+    }
+    if (!el) return { ok: false, error: 'no element at viewport point ' + x + ',' + y }
+    if (el.focus) el.focus()
+    var opts = { bubbles: true, cancelable: true, composed: true, view: win, clientX: x, clientY: y }
+    el.dispatchEvent(new MouseEvent('mousedown', opts))
+    el.dispatchEvent(new MouseEvent('mouseup', opts))
+    el.dispatchEvent(new MouseEvent('click', opts))
+    return { ok: true }
+  } catch (e: any) {
+    return { ok: false, error: (e && e.message) || String(e) }
+  }
+}
+
+const handleCdpInputBlocked = (cmdName: string, tabId: number, e: any, clickFallback?: { x: number; y: number }): Promise<boolean> => {
+  const msg = (e && e.message) ? e.message : String(e)
+  if (!CDP_INPUT_BLOCKED_RE.test(msg)) throw e
+
+  return Ext.tabs.get(tabId).catch(() => null).then((tab: any) => {
+    const url = (tab && tab.url) || ''
+
+    if (!tab || !isWebPageUrl(url)) {
+      // The play tab itself is showing a page this extension may not touch —
+      // typically another extension opened/redirected a tab mid-run.
+      store.dispatch(act.addLog('warning', `W371: ${cmdName} skipped a non-web play tab: "${url || '(tab gone)'}" — ${msg}`))
+      throw new Error(`E345: ${cmdName}: the tab to automate is showing "${url || '(no url)'}", a browser-internal or another extension's page that browser input cannot target. Another extension probably opened or redirected the tab mid-run. Switch back to the web page (uiv.open / selectWindow) and run again`)
+    }
+
+    // The page is a normal web page, so the attach was vetoed by an iframe
+    // belonging to a different extension somewhere in its frame tree.
+    if (clickFallback) {
+      store.dispatch(act.addLog('warning', `W371: another extension's frame inside ${url} blocks Chrome debugger input (${msg}) — ${cmdName} fell back to a DOM click at (${clickFallback.x}, ${clickFallback.y}). For trusted clicks, disable the extension that injects frames into this page, or use XClick (XModule)`))
+      return (chrome as any).scripting.executeScript({
+        target: { tabId, frameIds: [0] },
+        func: domFallbackClickAt,
+        args: [clickFallback.x, clickFallback.y]
+      }).then((results: any) => {
+        const r = results && results[0] && results[0].result
+        if (!r || !r.ok) {
+          throw new Error(`E346: ${cmdName}: Chrome debugger input is blocked by another extension's frame in this page, and the DOM click fallback also failed${r && r.error ? ` (${r.error})` : ''}. Disable the other extension for this site, or use uiv.page.click / XClick instead`)
+        }
+        return true
+      })
+    }
+
+    throw new Error(`E346: ${cmdName} could not attach Chrome's debugger to this page: an iframe injected by a different extension blocks it (${msg}). Disable the other extension for this site, or use the DOM/XModule variants (uiv.page.click / uiv.page.type / XClick / XType) instead`)
+  })
+}
+
 const runXMouseKeyboardCommand = (command: any) => {
   const { cmd, target, value, extra } = command
   console.log('#220 runXMouseKeyboardCommand command:>> ', command)
@@ -333,7 +417,8 @@ const runXMouseKeyboardCommand = (command: any) => {
         .then(() => decryptIfNeeded(target))
         .then((text) => {
           return getState()
-            .then((state: any) => sendCdpTypeText(state.tabIds.toPlay, text))
+            .then((state: any) => sendCdpTypeText(state.tabIds.toPlay, text)
+              .catch((e: any) => handleCdpInputBlocked('BType', state.tabIds.toPlay, e)))
             .then((success) => {
               if (!success) throw new Error(`E339: Failed to BType '${target}'`)
               return { byPass: true }
@@ -1322,7 +1407,18 @@ const runXMouseKeyboardCommand = (command: any) => {
                           .catch(() => {})
                     return pShowCursor
                       .then(() => getState())
-                      .then((state: any) => sendCdpMouseEvent(state.tabIds.toPlay, event))
+                      .then((state: any) => sendCdpMouseEvent(state.tabIds.toPlay, event)
+                        .catch((e: any) => handleCdpInputBlocked(
+                          cmd,
+                          state.tabIds.toPlay,
+                          e,
+                          // only a plain left single click has a faithful DOM
+                          // stand-in; moves/drags/modified clicks must not be
+                          // silently downgraded
+                          event.type === MouseEventType.Click && event.button === MouseButton.Left
+                            ? { x: event.x, y: event.y }
+                            : undefined
+                        )))
                   }
 
                   return type === 'desktop'
@@ -1735,6 +1831,23 @@ const runCommand = (command: any, index?: any, parentCommand?: any) => {
     case 'localStorageExport': {
       const deleteAfterExport = /\s*#DeleteAfterExport\s*/i.test(value)
 
+      // FileSaver's in-page <a download> click is unreliable in the Firefox
+      // sidebar and left no trace of where the file went — export through the
+      // background downloads API instead, and either log where the file went
+      // or fail the command loudly. A blob: URL, not a data: URL: Firefox's
+      // downloads API rejects data: URLs ("Illegal URL"), and the blob URL
+      // minted here is readable by the background (same extension origin).
+      const saveToDownloads = (blob: Blob, filename: string): Promise<void> => {
+        const url = URL.createObjectURL(blob)
+        // revoke after the download has had ample time to read the stream —
+        // the ipc resolves when the download STARTS, not when it completes
+        setTimeout(() => URL.revokeObjectURL(url), 60000)
+        return Promise.resolve(csIpc.ask('PANEL_DOWNLOAD_URL', { url, filename }))
+          .then(() => {
+            store.dispatch(act.addLog('info', `'${filename}' exported to the browser's Downloads folder`))
+          })
+      }
+
       if (/^\path=/i.test(target)) {
         getXLocal()
           .getVersionLocal()
@@ -1757,11 +1870,13 @@ const runCommand = (command: any, index?: any, parentCommand?: any) => {
               })
             } else {
               const text = store.getState().logs.map(renderLog).join('\n')
-              FileSaver.saveAs(new Blob([text]), 'uivision_log.txt')
-
-              if (deleteAfterExport) {
-                store.dispatch((act as any).clearLogs())
-              }
+              saveToDownloads(new Blob([text]), 'uivision_log.txt')
+                .then(() => {
+                  if (deleteAfterExport) {
+                    store.dispatch((act as any).clearLogs())
+                  }
+                })
+                .catch((e) => store.dispatch(act.addLog('error', (e && e.message) || String(e))))
             }
           })
         return result
@@ -1769,12 +1884,12 @@ const runCommand = (command: any, index?: any, parentCommand?: any) => {
 
       if (/^\s*log\s*$/i.test(target)) {
         const text = store.getState().logs.map(renderLog).join('\n')
-        FileSaver.saveAs(new Blob([text]), 'uivision_log.txt')
-
-        if (deleteAfterExport) {
-          store.dispatch((act as any).clearLogs())
-        }
-        return result
+        return saveToDownloads(new Blob([text]), 'uivision_log.txt').then(() => {
+          if (deleteAfterExport) {
+            store.dispatch((act as any).clearLogs())
+          }
+          return result
+        })
       }
 
       if (/\.csv$/i.test(target)) {
@@ -1782,13 +1897,13 @@ const runCommand = (command: any, index?: any, parentCommand?: any) => {
           if (!existed) throw new Error(`${target} doesn't exist`)
 
           return csvStorage.read(target, 'Text').then((text) => {
-            FileSaver.saveAs(new Blob([text]), target)
+            return saveToDownloads(new Blob([text]), target).then(() => {
+              if (deleteAfterExport) {
+                csvStorage.remove(target).then(() => store.dispatch(act.listCSV()))
+              }
 
-            if (deleteAfterExport) {
-              csvStorage.remove(target).then(() => store.dispatch(act.listCSV()))
-            }
-
-            return result
+              return result
+            })
           })
         })
       }
@@ -1798,13 +1913,13 @@ const runCommand = (command: any, index?: any, parentCommand?: any) => {
           if (!existed) throw new Error(`${target} doesn't exist`)
 
           return ssStorage.read(target, 'ArrayBuffer').then((buffer) => {
-            FileSaver.saveAs(new Blob([new Uint8Array(buffer as ArrayBuffer)]), target)
+            return saveToDownloads(new Blob([new Uint8Array(buffer as ArrayBuffer)]), target).then(() => {
+              if (deleteAfterExport) {
+                ssStorage.remove(target).then(() => store.dispatch(act.listScreenshots()))
+              }
 
-            if (deleteAfterExport) {
-              ssStorage.remove(target).then(() => store.dispatch(act.listScreenshots()))
-            }
-
-            return result
+              return result
+            })
           })
         })
       }
@@ -2162,21 +2277,27 @@ const runCommand = (command: any, index?: any, parentCommand?: any) => {
 
                 // TODO: refactoring code required in regard to scaleFactor / macScaleFactor / window.devicePixelRatio
                 // Pointing at a screen coordinate is the hardest thing asked
-                // of a vision model, and only the Anthropic path uses the
-                // computer-use tool that is trained for it. Everything else
-                // asks a general vision model and takes the numbers on trust,
-                // which measured well on synthetic images and noticeably worse
-                // on a real page. Say so rather than let it look broken.
+                // of a vision model. The Anthropic path uses the computer-use
+                // tool trained for it, and the Ui.Vision AI free tier serves a
+                // grounding-capable model behind its proxy — both are tested
+                // paths, so neither warns. Everything else asks a general
+                // vision model and takes the numbers on trust, which measured
+                // well on synthetic images and noticeably worse on a real
+                // page. Say so rather than let it look broken. The log calls
+                // the command by its JS name first (ai.find) — that is what
+                // scripts and the docs say — with the classic aiScreenXY in
+                // brackets for table macros.
                 if (!screenXYAnthropicKey) {
-                  const providerLabel = getAIProviderConfig().label
-                  store.dispatch(act.addLog(
-                    'warning',
-                    `aiScreenXY on ${providerLabel}: so far this command has only been tested with Anthropic, ` +
-                    `whose path uses the computer-use tool built for pointing at screen coordinates. ` +
-                    `Other models estimate the position and can be off by several percent — enough to miss ` +
-                    `anything small. If it misses, a real finder is exact: uiv.$ for DOM elements, ` +
-                    `uiv.findImage for pictures, uiv.ocr.findText for rendered text.`
-                  ))
+                  const providerConfig = getAIProviderConfig()
+                  if (providerConfig.provider !== 'uivision') {
+                    store.dispatch(act.addLog(
+                      'warning',
+                      `ai.find (aiScreenXY) on ${providerConfig.label}: so far this command has only been tested ` +
+                      `with Anthropic and Ui.Vision AI. Other models estimate the position and can be off by ` +
+                      `several percent — enough to miss anything small. If it misses, a real finder is exact: ` +
+                      `uiv.$ for DOM elements, uiv.findImage for pictures, uiv.ocr.findText for rendered text.`
+                    ))
+                  }
                 }
 
                 const pLocate = screenXYAnthropicKey
@@ -3424,8 +3545,7 @@ const runCommand = (command: any, index?: any, parentCommand?: any) => {
             const cvApi = getNativeCVAPI()
 
             // On the other hand, desktop screenshot is in device pixel
-            return cvApi
-              .captureDesktop({ path: undefined })
+            return withDesktopCaptureCover(() => cvApi.captureDesktop({ path: undefined }))
               .then((hardDrivePath) => cvApi.readFileAsDataURL(hardDrivePath, true))
               .then((dataUrl) => {
                 saveDataUrlToLastDesktopScreenshot(dataUrl)
@@ -3643,8 +3763,7 @@ const runCommand = (command: any, index?: any, parentCommand?: any) => {
           : (actualPath) => {
               store.dispatch(act.addLog('info', `desktop screenshot saved to hard drive at '${actualPath}'`))
             }
-      return cvApi
-        .captureDesktop({ path: filePath })
+      return withDesktopCaptureCover(() => cvApi.captureDesktop({ path: filePath }))
         .then(next)
         .then(() => ({
           byPass: true
@@ -3769,7 +3888,7 @@ export const runCsFreeCommands = (command: any, index?: any, parentCommand?: any
     }
   }
 
-  if (shouldShowOcrOverlay(cmd)) {
+  if (shouldShowOcrOverlay(cmd) && shouldHideGuiDuringCapture()) {
     store.dispatch(Actions.setOcrInDesktopMode(true))
   }
 

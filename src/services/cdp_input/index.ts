@@ -233,9 +233,16 @@ export const buildTypeEventSequence = (text: string): CdpKeyEventParams[] => {
 // Firefox it stays an empty stub (no chrome.debugger API) — so a truthiness
 // check passes and the crash surfaces later as "debugger.onDetach is
 // undefined". Check for the actual method instead.
+// Whether trusted CDP input exists at all — Firefox never provides the
+// debugger API. Callers with an OS-input alternative (the XModule) can route
+// around the B commands up front instead of failing with E331 (the
+// computer-use agent does this: on Firefox its browser-scope actions run as
+// XClick/XType).
+export const isCdpInputAvailable = (): boolean =>
+  !!(Ext.debugger && typeof (Ext.debugger as any).attach === 'function')
+
 const ensureDebuggerApi = (commands: string, alternative: string) => {
-  const available = Ext.debugger && typeof (Ext.debugger as any).attach === 'function'
-  if (available) return
+  if (isCdpInputAvailable()) return
 
   if (Ext.isFirefox()) {
     throw new Error(`E331: ${commands} not supported by Firefox at the moment — Firefox does not provide the debugger API to extensions. Use ${alternative} instead`)

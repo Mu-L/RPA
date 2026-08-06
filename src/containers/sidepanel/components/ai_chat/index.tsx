@@ -185,13 +185,17 @@ class AiChat extends React.Component<AiChatStateProps, AiChatState> {
 
   getMacroAgentService = (): MacroAgentService => {
     if (!this.macroAgentService) {
-      const captureScreenShotFunction = async () => {
+      const captureScreenShotFunction = async (opts?: { desktop?: boolean }) => {
         const vars = getVarsInstance()
-        const isDesktop = this.props.config.cvScope === 'desktop'
-        return await captureScreenShot({
+        // the screenshot tool's scope: "desktop" wins; otherwise follow the
+        // CV scope setting like the classic commands do
+        const isDesktop = !!(opts && opts.desktop) || this.props.config.cvScope === 'desktop'
+        const shot = await captureScreenShot({
           vars,
           isDesktop
         })
+        if (!shot) throw new Error('screenshot capture failed')
+        return shot
       }
 
       this.macroAgentService = new MacroAgentService({
@@ -221,6 +225,15 @@ class AiChat extends React.Component<AiChatStateProps, AiChatState> {
   send = async (prompt_?: string) => {
     const prompt = prompt_ || this.state.aiPromptText
     if (this.state.processRunning || prompt === '') {
+      return
+    }
+
+    // QA hook: type debugshowaiprobanner to render the daily-limit error with
+    // its AI PRO banner — the SAME error text and match path a real E703
+    // takes, so what this shows is exactly what users get. No AI call is made.
+    if (prompt.trim().toLowerCase() === 'debugshowaiprobanner') {
+      this.setState({ aiPromptText: '' })
+      this.addConversation('Error', 'Daily free AI limit reached. It resets at midnight. Add your own API key in Settings > AI for unlimited use or sign-up for the Ui.Vision AI PRO plan.', true)
       return
     }
 
@@ -469,6 +482,18 @@ class AiChat extends React.Component<AiChatStateProps, AiChatState> {
                       >
                         Open AI settings
                       </a>
+                    ) : null}
+                    {/* AI PRO upsell under the daily-limit error — the one
+                        moment the user is guaranteed to be looking. The log
+                        keeps the plain error; the clickable pitch lives here. */}
+                    {item.sender === 'Error' && /Daily free AI limit|E703/i.test(item.message) ? (
+                      <div className="ai-pro-banner">
+                        Increase your AI limit 10 times with our new AI PRO plan — more details at{' '}
+                        <a href="https://go.ui.vision/?help=aipro" target="_blank" rel="noreferrer">
+                          AI PRO
+                        </a>
+                        .
+                      </div>
                     ) : null}
                   </div>
                 </div>

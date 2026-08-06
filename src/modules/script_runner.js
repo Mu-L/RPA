@@ -62,6 +62,11 @@ import getSaveTestCase from '@/components/save_test_case'
 // real JS exceptions (so try/catch works around any uiv call)
 // ---------------------------------------------------------------------------
 const POLYFILL = `var uiv = {};
+// true for the file being run. With @include, the resolver re-stamps the flag
+// per segment (false before included parts, true before the main body) — but a
+// script WITHOUT includes never went through that injection, so without this
+// default a standalone "if (uiv.main)" self-test silently skipped (real bug).
+uiv.main = true;
 uiv.__bridge = function (op, args) {
   var r = __uiv_bridge(op, JSON.stringify(args === undefined ? {} : args));
   if (!r.ok) { throw new Error(r.error); }
@@ -554,14 +559,35 @@ uiv.download = function (what, opts) {
   return uiv.__bridge('download', base);
 };
 uiv.getVar = function (name, fallback) {
+  // !CLIPBOARD is the OS clipboard — read it FRESH through the bridge (the
+  // variable-pool copy is only refreshed by classic commands, so in a script
+  // it would silently hand back stale data)
+  if (/^\\s*!clipboard\\s*$/i.test(String(name))) {
+    if (arguments.length > 1) {
+      try { return uiv.__bridge('clipboardRead', {}); } catch (e) { return fallback; }
+    }
+    return uiv.__bridge('clipboardRead', {});
+  }
   var r = __uiv_get(String(name), arguments.length > 1);
   if (!r.ok) { throw new Error(r.error); }
   if (r.unset) { return fallback; }
   return r.value;
 };
 uiv.setVar = function (name, value) {
+  // symmetric: writing !CLIPBOARD puts the text on the real OS clipboard too
+  if (/^\\s*!clipboard\\s*$/i.test(String(name))) {
+    uiv.__bridge('clipboardWrite', { text: value === undefined || value === null ? '' : String(value) });
+    return;
+  }
   var r = __uiv_set(String(name), value);
   if (!r.ok) { throw new Error(r.error); }
+};
+// OS clipboard, first-class: read() returns the current clipboard text fresh,
+// write(text) replaces it. getVar/setVar('!CLIPBOARD') are aliases of these
+// (kept for classic-macro parity) — both talk to the REAL clipboard.
+uiv.clipboard = {
+  read: function () { return uiv.__bridge('clipboardRead', {}); },
+  write: function (text) { uiv.__bridge('clipboardWrite', { text: text === undefined || text === null ? '' : String(text) }); }
 };
 ` +
 // ES6 BUILT-INS. Babel compiles syntax, not library: a script may say
@@ -769,24 +795,16 @@ let scriptBaseTabId = null
 // uiv call. Remember such writes and replay them as overrideScope, which
 // commonPlayerState spreads last — the script's value then wins for the rest
 // of the run, the way a classic macro's `store` does.
-const SCRIPT_SCOPE_KEYS = ['!TIMEOUT_PAGELOAD', '!TIMEOUT_WAIT', '!TIMEOUT_MACRO', '!TIMEOUT_DOWNLOAD', '!REPLAYSPEED']
+// !CVSCOPE is here for uiv.run('XDesktopAutomation', ...): the command writes
+// the var, but every player-path command marks the session stale and the next
+// startScriptSession re-seeded !CVSCOPE from config — silently dropping
+// desktop mode, so ai.find/OCR captured the viewport again (real bug).
+// !CAPTURE_HIDE_GUI (false = desktop captures show the extension UI, see
+// shouldHideGuiDuringCapture) rides along for the same reason: the
+// ClearSidebarLogViaGUI demos set it once at the top and every later
+// desktop find must still see it.
+const SCRIPT_SCOPE_KEYS = ['!TIMEOUT_PAGELOAD', '!TIMEOUT_WAIT', '!TIMEOUT_MACRO', '!TIMEOUT_DOWNLOAD', '!REPLAYSPEED', '!CVSCOPE', '!CAPTURE_HIDE_GUI']
 let scriptScopeOverrides = {}
-
-// Result variables a FINDER already returns.
-//
-// !AI1-!AI4 are how the aiScreenXY COMMAND hands coordinates to the next
-// command — a table macro has no other channel. A script does: uiv.ai.find()
-// returns the match. Reading them here is not just redundant, it is fragile:
-// the NEXT uiv call overwrites them, so code that works does so by accident of
-// ordering. Fully replaced, so reading one throws.
-const REPLACED_RESULT_VARS = /^!AI[1-4]$/i
-
-// These are also returned by their finders (match.x / match.y), but they are
-// still the only route for commands with no finder equivalent — the *Relative
-// family clicks at an offset from an anchor, which no finder expresses. So:
-// warn, do not block.
-const DISCOURAGED_RESULT_VARS = /^!(IMAGE|OCR)(X|Y)$/i
-let warnedResultVars = null
 
 // Wall clock for the whole run, reported at the end the way a table macro
 // reports its own ("Macro completed (Runtime 3.02s)") and published as
@@ -1661,11 +1679,24 @@ async function prepareRunMacro (code) {
 // the user hands to uiv.run stays on the player path, whatever it is.
 const FAST_PATH_COMMANDS = /^(click|type|BClick|BType|BMove|XClick|XType|XMove|executeScript)$/i
 
-// ${!URL} written into a command a SCRIPT issues — see runOneCommand
-const URL_VAR_IN_TEXT = /\$\{\s*!url\s*\}/i
+// ${!URL}, ${!COL1}, ${!CURRENT_TAB_NUMBER}, … written into a command a
+// SCRIPT issues — see runOneCommand. Every ${!name} token is checked against
+// DEPRECATED_VARIABLES, so the render-time door and getVar refuse the same
+// names with the same workaround.
+const BANG_VAR_IN_TEXT = /\$\{\s*(!\w+)\s*\}/g
 
-// ${!CURRENT_TAB_NUMBER} and its RELATIVE family, same render-time door
-const TAB_VAR_IN_TEXT = /\$\{\s*(!current_tab_number(?:_relative(?:_index|_id)?)?)\s*\}/i
+const findBlockedVarInText = (text) => {
+  let m
+  BANG_VAR_IN_TEXT.lastIndex = 0
+  // eslint-disable-next-line no-cond-assign
+  while (m = BANG_VAR_IN_TEXT.exec(text)) {
+    const deprecated = getDeprecatedVariable(m[1])
+    if (deprecated && deprecated.jsError) {
+      return { name: m[1], jsError: deprecated.jsError }
+    }
+  }
+  return null
+}
 
 // One text for the whole runner. This used to be the bare "E901: no browser
 // tab available" in nine places and the explaining version in exactly one —
@@ -1765,6 +1796,12 @@ async function startScriptSession (tab) {
     '!WaitForVisible': false,
     '!StringEscape': true,
     '!BROWSER': Ext.isFirefox() ? 'firefox' : 'chrome',
+    '!OS': (() => {
+      const ua = window.navigator.userAgent
+      if (/windows/i.test(ua)) return 'windows'
+      if (/mac/i.test(ua)) return 'mac'
+      return 'linux'
+    })(),
     ...scriptScopeOverrides // a uiv.setVar'd timeout still wins
   }, true)
 
@@ -1897,28 +1934,15 @@ async function runOneCommand (cmd, target, value, cmdFields, opts) {
 
   // Every command a script issues gets its target/value variable-rendered on
   // the way out (askBackgroundToRunCommand), so ${!URL} would resolve here the
-  // same way getVar('!URL') would — to the PREVIOUS page. getVar already
-  // refuses it (DEPRECATED_VARIABLES); this closes the render-time door, which
-  // is not just uiv.run: uiv.page.type(locator, '${!URL}') renders too.
-  if (URL_VAR_IN_TEXT.test(`${target || ''}\n${value || ''}`)) {
+  // same way getVar('!URL') would — to the PREVIOUS page — and ${!COL1} to a
+  // row nothing in a script can have read. getVar already refuses these
+  // (DEPRECATED_VARIABLES); this closes the render-time door, which is not
+  // just uiv.run: uiv.page.type(locator, '${!URL}') renders too.
+  const blockedVar = findBlockedVarInText(`${target || ''}\n${value || ''}`)
+  if (blockedVar) {
     return {
       ok: false,
-      error: `'\${!URL}' cannot be used in a JS script (here: ${cmd}) — !URL is only refreshed by the classic player, ` +
-        'so in a script it holds the PREVIOUS page. Read the page first and pass the string: ' +
-        "var url = uiv.eval('return location.href'). " +
-        '(On a page that cannot run scripts, uiv.tabs.list() carries a url per tab.)'
-    }
-  }
-
-  // same door for the tab-position variables: only classic-player commands
-  // refresh them, so a rendered value next to uiv.tabs.* is silently stale
-  const tabVar = `${target || ''}\n${value || ''}`.match(TAB_VAR_IN_TEXT)
-  if (tabVar) {
-    return {
-      ok: false,
-      error: `'\${${tabVar[1]}}' cannot be used in a JS script (here: ${cmd}) — only classic-player commands refresh it, ` +
-        'so next to uiv.tabs.select/open/close it holds a STALE position. Read the position first and pass the number: ' +
-        'var tab = uiv.tabs.list().find(function (t) { return t.current; }) — tab.index is 1-based, left to right.'
+      error: `'\${${blockedVar.name}}' cannot be used in a JS script (here: ${cmd}) — ${blockedVar.jsError}`
     }
   }
 
@@ -1927,8 +1951,12 @@ async function runOneCommand (cmd, target, value, cmdFields, opts) {
 
   // commands the player runs entirely in the panel (byPass, no content
   // script, no tab — see the store/echo/... cases in run_command.ts): they
-  // must work even when only browser-internal pages are open
-  const isTabFreeCmd = /^(store|echo|comment|pause|throwError)$/i.test(cmd)
+  // must work even when only browser-internal pages are open.
+  // XDesktopAutomation qualifies too — it only flips !CVSCOPE panel-side, and
+  // desktop-scope scripts must be able to run it before any web tab exists
+  // (demanding a tab here killed every desktop demo started from a fresh
+  // browser with E901 on its first line).
+  const isTabFreeCmd = /^(store|echo|comment|pause|throwError|XDesktopAutomation)$/i.test(cmd)
 
   const isOpenCmd = /^(open|openBrowser)$/i.test(cmd)
 
@@ -2649,21 +2677,24 @@ function parsedResultsToText (response) {
     .replace(/\r\n/g, '\n')
 }
 
-// OCR engine escalation, key-aware. The built-in Javascript OCR (engine 98)
-// is the weakest reader — white-on-dark UI text and small glyphs come back as
-// soup. OCR.Space cloud OCR (engines 1-3, run by the Ui.Vision team) reads
-// far more, but needs an API key; which advice applies depends on whether one
-// is configured, so the note names the ONE next step instead of a menu.
-// Engine choice within OCR.Space: 2 reads much better than 1 for almost all
-// use cases and has accurate boxes — the finder/click engine; 3 reads text
-// best of all, but its boxes are less accurate — first choice for pure reads,
-// coordinate fallback only when 2 also fails.
+// OCR reader escalation, environment-aware — the note names the next step(s)
+// for the AUTHOR to write into the macro; the engine is never switched at
+// runtime. Options by what this install has: the XModule Local OCR ({engine:
+// 99}) reads native UI and screenshots far better than the Javascript OCR;
+// uiv.ai.ask with a screenshot is a first-class reader too (free with a LOCAL
+// model); the OCR.Space cloud OCR (engines 2/3, both auto-detect the text
+// language — never 1) needs an API key; with none of those, ASK the user
+// about the free ocr.space key rather than settling for the bad read.
 function ocrSpaceUpgradeNote () {
   const cfg = store.getState().config || {}
   if ([1, 2, 3].includes(cfg.ocrEngine)) return '' // already reading with OCR.Space
+  const xmoduleHint = cfg.ocrEngine == 99
+    ? ''
+    : " If the RealUser XModule is installed, retry with {engine: 99} (XModule Local OCR) — it reads native UI and screenshots far better than the Javascript OCR."
+  const aiHint = " uiv.ai.ask('what does ... say?', {images: [uiv.shot.viewport()]}) (uiv.shot.desktop() for screen reads) or uiv.ai.find('the <target>') read what OCR cannot" + (cfg.aiProvider === 'local' ? ' — and with the LOCAL model configured here, at no per-call cost.' : ' (one billable model call each).')
   return cfg.ocrSpaceApiKey
-    ? ' BETTER READER AVAILABLE: an OCR.Space API key is configured in this install — retry with the cloud OCR (run by the Ui.Vision team), which reads far more than the built-in Javascript OCR, especially light-on-dark text: {engine: 2} for finders/anything that clicks (accurate coordinates); {engine: 3} for pure uiv.ocr.read (best text) — and only if engine 2 also fails to read a click target, fall back to engine 3 coordinates, which are less accurate.'
-    : ' BETTER READER AVAILABLE: the OCR.Space cloud OCR (run by the Ui.Vision team) reads far more than the built-in Javascript OCR, especially light-on-dark text — it needs a FREE API key from https://ocr.space/ocrapi, entered under Settings > OCR. After that: {engine: 2} for finders/clicking, {engine: 3} for pure uiv.ocr.read. Recommend this to the user when local OCR is not good enough.'
+    ? ' BETTER READER AVAILABLE:' + xmoduleHint + ' An OCR.Space API key is configured in this install — the cloud OCR (run by the Ui.Vision team) reads far more than the local engines, especially light-on-dark text: {engine: 2} for finders/anything that clicks (accurate coordinates); {engine: 3} for pure uiv.ocr.read (best text; coordinates less accurate). Both auto-detect the text language.' + aiHint
+    : ' BETTER READER AVAILABLE:' + xmoduleHint + aiHint + ' Alternatively the OCR.Space cloud OCR reads far more than the local engines — it needs a FREE API key from https://ocr.space/ocrapi, entered under Settings > OCR ({engine: 2} for finders/clicking, {engine: 3} for pure reads; both auto-detect the language): ASK the user whether they want the free account — do not silently settle for the bad read.'
 }
 
 // Why an OCR search matched nothing, in one line for the Find probe's log.
@@ -2867,6 +2898,11 @@ async function withElementWaitCountdown (label, fn) {
 
 async function dispatchBridge (op, args) {
   logBridgeCall(op, args)
+  // keep the script's clock honest on EVERY uiv call — the guide-recommended
+  // poll-loop guard parseFloat(uiv.getVar('!RUNTIME')) hung forever when the
+  // loop body only contained ops that skipped the classic-path update at
+  // handleRunResult (e.g. ocr.read({scope: 'desktop'}) + sleep)
+  try { getVarsInstance().set({ '!RUNTIME': milliSecondsToStringInSecond(scriptRuntimeMs()) }, true) } catch (e) { /* best-effort */ }
   if (PAGE_OPS.test(op)) await awaitPageQuiet()
 
   switch (op) {
@@ -2909,6 +2945,20 @@ async function dispatchBridge (op, args) {
         }
       }
 
+      // The classic 'run' command CANNOT work from a script: it pushes the
+      // called macro onto the classic player's call stack and relies on the
+      // player's main loop to execute it — but every uiv.run is a one-shot
+      // mini-run, so the frame is pushed and never played (and a called .js
+      // macro has no Commands at all, its program lives in Script). Without
+      // this rejection the call "succeeds" while the called macro silently
+      // never runs — a reported user bug.
+      if (/^run$/i.test(String(args.cmd || ''))) {
+        return {
+          ok: false,
+          error: "uiv.run('run', ...) is not supported in a JS script — the classic run command hands the called macro to the classic player's loop, which a script run does not use, so the called macro would never execute. Reuse code with an INCLUDE instead: put the shared functions in a .js macro and splice it in with a comment line like  // @include Demo and QA Test Scripts/Core/Sub/Sub_DemoCsvRead_FillForm.js  — the file is inserted before the script compiles (uiv.main is true only in the file that was started, so an included file can carry its own self-test)."
+        }
+      }
+
       // visionLimitSearchArea (and its *Relative variants) is the same trap:
       // a SETTING that silently applies to every LATER vision search. In a
       // script the search area is per-call.
@@ -2923,6 +2973,12 @@ async function dispatchBridge (op, args) {
       }
 
       const r = await runOneCommand(args.cmd, args.target, args.value)
+      if (r.ok && /^XDesktopAutomation$/i.test(String(args.cmd || ''))) {
+        // the command stored the new scope in !CVSCOPE — remember it as a
+        // scope override so the session re-seed cannot clobber it (see
+        // SCRIPT_SCOPE_KEYS)
+        rememberScriptScopeOverride('!CVSCOPE', getVarsInstance().get('!CVSCOPE'))
+      }
       return r.ok ? asValue(undefined) : r
     }
 
@@ -3354,6 +3410,26 @@ async function dispatchBridge (op, args) {
       return r.ok ? asValue(args.name) : r
     }
 
+    // --- OS clipboard ------------------------------------------------------
+    // uiv.getVar('!CLIPBOARD') / uiv.setVar('!CLIPBOARD', ...) route here so a
+    // script always talks to the REAL clipboard — the variable-pool copy is
+    // stale in a script (only classic commands that name !clipboard refresh it)
+    case 'clipboardRead': {
+      const text = await clipboard.get()
+      if (text === undefined) {
+        return { ok: false, error: "getVar: the browser denied reading the OS clipboard (no readable text on it, or clipboard access blocked)" }
+      }
+      getVarsInstance().set({ '!CLIPBOARD': text })   // keep the classic pool in sync
+      return asValue(text)
+    }
+
+    case 'clipboardWrite': {
+      const text = String(args.text === undefined || args.text === null ? '' : args.text)
+      await clipboard.set(text)
+      getVarsInstance().set({ '!CLIPBOARD': text })
+      return asValue(undefined)
+    }
+
     // --- uiv.download ------------------------------------------------------
     // Arm the background download manager (rename + completion tracking for
     // the NEXT download), start the download, wait, return the on-disk name.
@@ -3424,16 +3500,35 @@ async function dispatchBridge (op, args) {
     }
 
     case 'aiFind': {
-      await runAiCommand('aiScreenXY', args.question)
       const vars = getVarsInstance()
+      // {scope: 'desktop'} per call — the aiScreenXY command reads !CVSCOPE to
+      // decide what it screenshots, and without this option the only way to a
+      // desktop-scope ai.find was the sticky global XDesktopAutomation toggle
+      // (hidden state, the anti-pattern the per-call options exist to avoid).
+      // Set the scope for THIS call and restore the previous one afterwards.
+      const wantScope = args.scope === 'desktop' ? 'desktop' : (args.scope === 'browser' ? 'browser' : null)
+      const prevScope = wantScope ? vars.get('!CVSCOPE') : null
+      if (wantScope) {
+        vars.set({ '!CVSCOPE': wantScope }, true)
+        rememberScriptScopeOverride('!CVSCOPE', wantScope)
+      }
+      try {
+        await runAiCommand('aiScreenXY', args.question)
+      } finally {
+        if (wantScope) {
+          vars.set({ '!CVSCOPE': prevScope }, true)
+          rememberScriptScopeOverride('!CVSCOPE', prevScope)
+        }
+      }
       const x = Number(vars.get('!AI1'))
       const y = Number(vars.get('!AI2'))
       if (!isFinite(x) || !isFinite(y)) {
         return { ok: false, error: `uiv.ai.find: the model did not return usable coordinates for '${args.question}' — it could not tell where that is on the screenshot. Describe the target by what it LOOKS like and where it sits ('the blue Accept all button at the bottom of the cookie bar'), and make sure it is actually visible in the viewport (ai.find does NOT auto-wait — wait for the page with uiv.$ first). If it stays unreliable, use a real finder instead: uiv.$ for anything in the DOM, uiv.ocr.findText for rendered text, or save_element_image + uiv.findImage for a fixed graphic` }
       }
       // a real match object, so it composes with uiv.browser.* / uiv.desktop.*
-      // and the scope guard catches a desktop point used in the browser tier
-      const scope = /desktop/i.test(String(vars.get('!CVSCOPE') || '')) ? 'desktop' : 'browser'
+      // and the scope guard catches a desktop point used in the browser tier.
+      // A per-call scope wins; otherwise the global CV scope tags the match.
+      const scope = wantScope || (/desktop/i.test(String(vars.get('!CVSCOPE') || '')) ? 'desktop' : 'browser')
       return asValue({ x: Math.round(x), y: Math.round(y), scope })
     }
 
@@ -3795,7 +3890,7 @@ function buildInterpreter (code) {
         // script error. Never throw natively: that escapes step() and kills
         // the run uncatchably. Returning undefined for every failure (the
         // previous behaviour) made a typo'd '!TIMEOOUT_WAIT' and a genuinely
-        // unset '!IMAGEX' indistinguishable, surfacing as NaN further down.
+        // unset '!STATUSOK' indistinguishable, surfacing as NaN further down.
         try {
           const key = String(name).trim()
 
@@ -3803,29 +3898,9 @@ function buildInterpreter (code) {
             return interp.nativeToPseudo({ ok: false, error: "getVar: needs a variable name, e.g. uiv.getVar('!LASTCOMMANDOK')" })
           }
 
-          // Replaced by a finder that returns the value directly.
-          if (REPLACED_RESULT_VARS.test(key)) {
-            return interp.nativeToPseudo({
-              ok: false,
-              error: `getVar('${key}') is not supported in a JS script — uiv.ai.find(question) RETURNS the match: ` +
-                `const p = uiv.ai.find('the search icon'); uiv.browser.click(p). ` +
-                `${key} is overwritten by the next uiv call, so reading it only ever worked by accident of ordering.`
-            })
-          }
-
-          // Available, but there is almost always a better way.
-          if (DISCOURAGED_RESULT_VARS.test(key) && warnedResultVars && !warnedResultVars.has(key.toUpperCase())) {
-            warnedResultVars.add(key.toUpperCase())
-            store.dispatch(act.addLog(
-              'warning',
-              `${key} is reset by the next uiv call — read it immediately, or better: the finders return the ` +
-              `same thing as match.x / match.y (uiv.findImage(...) / uiv.ocr.findText(...)). It is still the only ` +
-              `route for uiv.run('XClickRelative', ...) and the other *Relative commands.`
-            ))
-          }
-
-          // deprecated in scripts: fail with the workaround rather than hand
-          // back a value the per-command re-baselining makes meaningless
+          // table-macros-only and deprecated variables (finder-result vars,
+          // the csvRead family, !URL, …): fail with the workaround rather
+          // than hand back a value only a table command chain could consume
           const deprecated = getDeprecatedVariable(key)
           if (deprecated && deprecated.jsError) {
             return interp.nativeToPseudo({ ok: false, error: `getVar: ${deprecated.jsError}` })
@@ -3845,7 +3920,7 @@ function buildInterpreter (code) {
             if (hasFallback) return interp.nativeToPseudo({ ok: true, unset: true })
 
             const hint = key.charAt(0) === '!'
-              ? 'it is filled in by Ui.Vision commands — read it right after the uiv call that produces it (before the first uiv call of a run, no special variable is set yet)'
+              ? 'it is filled in by Ui.Vision commands — read it right after the uiv call that produces it (environment facts like !BROWSER/!OS and the config values are pre-seeded and always readable; RESULT variables only exist after their command)'
               : `set it with uiv.setVar('${key}', …) first, or run the command that stores into it`
 
             return interp.nativeToPseudo({
@@ -3869,15 +3944,13 @@ function buildInterpreter (code) {
         try {
           const key = String(name)
 
-          // !csvLine is an ACCUMULATOR: each write appends one cell, and the
-          // row only exists until csvSave flushes it. Nothing can read it back.
-          // In a script a row is just an array, so this is always a mistake —
-          // and a silent one, since the write itself succeeds.
-          if (/^!csvline$/i.test(key.trim())) {
-            return interp.nativeToPseudo({
-              ok: false,
-              error: "setVar('!csvLine', ...) is not supported in a JS script — build the row as an array and write it with uiv.csv.append('file.csv', [a, b, c]). !csvLine collects one cell per write and cannot be read back."
-            })
+          // table-macro-only variables (the csvRead family, !csvLine, the
+          // search-area bookkeeping, …) are refused on the WRITE side too —
+          // the write would succeed silently and mean nothing, since nothing
+          // in a script can consume it
+          const deprecatedWrite = getDeprecatedVariable(key)
+          if (deprecatedWrite && deprecatedWrite.jsError) {
+            return interp.nativeToPseudo({ ok: false, error: `setVar: ${deprecatedWrite.jsError}` })
           }
 
           const native = interp.pseudoToNative(value)
@@ -3965,7 +4038,6 @@ export async function runScript (code, opts = {}) {
   scriptSessionStale = false
   scriptFrameId = null
   scriptStartedAt = Date.now() // wall clock for the end-of-run Runtime line
-  warnedResultVars = new Set() // one nudge per variable per run, not per read
   perfReset()
   armNavigationWatcher() // one listener for the run; see settleAfterClick
   emit('status', 'running')
@@ -4013,6 +4085,31 @@ export async function runScript (code, opts = {}) {
       // run with keepVariables so uiv.setVar survives across them);
       // keepVars: partial runs from the context menu reuse the pool
       getVarsInstance().reset({ keepGlobal: true })
+    }
+    if (prepared) {
+      // STATIC facts are readable from the FIRST line of a script —
+      // uiv.getVar('!BROWSER') / ('!OS') at the top of a macro (a browser
+      // guard clause, a per-OS shortcut table) must not require a uiv command
+      // to have run first. These are environment facts and config values, not
+      // command results; the session start re-seeds them later along with the
+      // setVar-override bookkeeping, which is harmless.
+      const cfg = store.getState().config
+      getVarsInstance().set({
+        '!BROWSER': Ext.isFirefox() ? 'firefox' : 'chrome',
+        '!OS': (() => {
+          const ua = window.navigator.userAgent
+          if (/windows/i.test(ua)) return 'windows'
+          if (/mac/i.test(ua)) return 'mac'
+          return 'linux'
+        })(),
+        '!TIMEOUT_PAGELOAD': parseFloat(cfg.timeoutPageLoad),
+        '!TIMEOUT_WAIT': parseFloat(cfg.timeoutElement),
+        '!TIMEOUT_MACRO': parseFloat(cfg.timeoutMacro),
+        '!TIMEOUT_DOWNLOAD': parseFloat(cfg.timeoutDownload),
+        '!OCRLANGUAGE': cfg.ocrLanguage,
+        '!OCRENGINE': cfg.ocrEngine,
+        '!CVSCOPE': cfg.cvScope
+      }, true)
     }
     if (prepared && opts.seedVars && Object.keys(opts.seedVars).length) {
       // after the reset, so an invocation's !CMD_VARn survive into the run

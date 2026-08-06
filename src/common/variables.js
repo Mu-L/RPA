@@ -58,11 +58,13 @@ const isValidKeyConstant = (pattern) => {
 const DEFAULT_KEY = 'main'
 const cache = {}
 
-// Variables on their way out. Like DEPRECATED_COMMANDS in common/command.ts,
-// deprecation is about new authoring — table macros that already use them keep
-// working unchanged. `jsError` is set when the variable cannot work in a JS
-// script at all: reading it there fails with this message instead of handing
-// back a plausible-looking value that is silently meaningless.
+// Variables on their way out, plus table-macro-only variables. Like
+// DEPRECATED_COMMANDS in common/command.ts, deprecation is about new
+// authoring — table macros that already use them keep working unchanged.
+// `jsError` is set when the variable cannot work in a JS script at all:
+// reading (or writing) it there fails with this message instead of handing
+// back a plausible-looking value that is silently meaningless. `pattern`
+// matches a family of names (!COL1, !COL2, …) where `name` is exact.
 export const DEPRECATED_VARIABLES = [
   {
     name: '!URL',
@@ -104,12 +106,84 @@ export const DEPRECATED_VARIABLES = [
     jsError:
       "'!CURRENT_TAB_NUMBER_RELATIVE_ID' is deprecated internal player bookkeeping and is re-set before every uiv call. " +
       'uiv.tabs.list() shows the live positions — the entry with current: true is the tab your commands act on.'
+  },
+  {
+    name: '!COL1',
+    pattern: /^!COL\d+$/,
+    note: 'table macros only; in JS uiv.csv.read(file) returns all rows as a 2D array',
+    jsError:
+      "'!COL1', '!COL2', … are how the classic csvRead command hands the current row to the NEXT table command — a script does not need that channel: " +
+      "uiv.csv.read('file.csv') returns ALL rows as a real 2D array. var rows = uiv.csv.read('data.csv'); rows[0][0] is what !COL1 held on row 1 — " +
+      'loop with rows.forEach(function (row, i) { … }).'
+  },
+  {
+    name: '!CSVREADSTATUS',
+    pattern: /^!CSVREAD(STATUS|MAXROW|LINENUMBER)$/,
+    note: 'table macros only; csvRead bookkeeping — in JS uiv.csv.read(file) makes it unnecessary',
+    jsError:
+      "'!CSVREADSTATUS', '!CSVREADMAXROW' and '!CSVREADLINENUMBER' are row-by-row bookkeeping for the classic csvRead command, which is not available in a JS script. " +
+      "uiv.csv.read('file.csv') returns all rows at once: rows.length replaces !CSVREADMAXROW, the loop index replaces !CSVREADLINENUMBER, " +
+      'and a missing file throws instead of setting !CSVREADSTATUS.'
+  },
+  {
+    name: '!CSVLINE',
+    note: 'table macros only; a hidden one-cell-per-write accumulator — in JS a row is just an array',
+    jsError:
+      "'!csvLine' is a hidden accumulator: each write appends ONE CELL to a row that only exists until csvSave flushes it, and nothing can read it back. " +
+      "In a script a row is just an array — build it and write it with uiv.csv.append('file.csv', [a, b, c])."
+  },
+  {
+    name: '!TIMES',
+    pattern: /^!(TIMES|FOREACH)$/,
+    note: 'table macros only; loop counters of the times/forEach commands — a JS loop has its own',
+    jsError:
+      "'!TIMES' and '!FOREACH' are the loop counters of the classic times/forEach commands, and those block commands cannot run in a JS script. " +
+      'A JS loop carries its own counter: for (var i = 1; i <= n; i++) { … } or rows.forEach(function (row, i) { … }).'
+  },
+  {
+    name: '!IMAGEX',
+    pattern: /^!IMAGE(X|Y|WIDTH|HEIGHT)$/,
+    note: 'table macros only; in JS the visual finder returns the match',
+    jsError:
+      "'!IMAGEX', '!IMAGEY', '!IMAGEWIDTH' and '!IMAGEHEIGHT' are how a table macro reads its last visual match — a JS finder RETURNS the match: " +
+      "var m = uiv.findImage('button.png'); m.x / m.y is the click point, m.rect.width / m.rect.height the size. " +
+      'For a fixed offset use uiv.offset(m, dx, dy) — the JS form of the *Relative targets — instead of doing the arithmetic yourself.'
+  },
+  {
+    name: '!OCRX',
+    pattern: /^!(OCR(X|Y|WIDTH|HEIGHT)|OCR_LEFT_X|OCR_RIGHT_X)$/,
+    note: 'table macros only; in JS uiv.ocr.findText returns the match',
+    jsError:
+      "'!OCRX', '!OCRY', '!OCRWIDTH' and '!OCRHEIGHT' are how a table macro reads its last OCR match — uiv.ocr.findText(text) RETURNS the match: " +
+      'm.x / m.y is the click point, m.rect the box. For a fixed offset use uiv.offset(m, dx, dy) — the JS form of the *TextRelative targets ' +
+      "(desktop scope composes the same way: uiv.desktop.click(uiv.offset(uiv.ocr.findText('mc', {scope: 'desktop'}), 8, -14)))."
+  },
+  {
+    name: '!AI1',
+    pattern: /^!AI[1-4]$/,
+    note: 'table macros only; uiv.ai.find(question) returns the match',
+    jsError:
+      "'!AI1'–'!AI4' are how the aiScreenXY command hands coordinates to the NEXT table command — a script does not need that channel: " +
+      "uiv.ai.find(question) RETURNS the match: var p = uiv.ai.find('the search icon'); uiv.browser.click(p). " +
+      'The variables are overwritten by the next uiv call, so reading them only ever worked by accident of ordering.'
+  },
+  {
+    name: '!VISUALSEARCHAREA',
+    pattern: /^!(VISUALSEARCHAREA|STOREDIMAGERECT)$/,
+    note: 'table macros only; visionLimitSearchArea/storeImage bookkeeping — in JS pass {area: …} per call',
+    jsError:
+      "'!VISUALSEARCHAREA' and '!STOREDIMAGERECT' are bookkeeping for visionLimitSearchArea, which is not available in a JS script (a setting on line 12 " +
+      'must not silently change what "find" means on line 40). Pass the region to the call itself: ' +
+      "uiv.findImage('handle.png', {area: match | {x, y, width, height}}), uiv.ocr.findText(text, {area: …}) or uiv.ocr.read({area: …}) — " +
+      'and every finder match carries its own rectangle as match.rect.'
   }
 ]
 
 export const getDeprecatedVariable = (name) => {
   const key = ((name || '') + '').trim().toUpperCase()
-  return DEPRECATED_VARIABLES.find(item => item.name === key) || null
+  return DEPRECATED_VARIABLES.find(item => (
+    item.pattern ? item.pattern.test(key) : item.name === key
+  )) || null
 }
 
 const validateVariableName = (name) => {
@@ -228,6 +302,7 @@ export default function varsFactory (name = DEFAULT_KEY, options = {}, initial =
               key !== '!PROXY_EXEC_COUNT' &&
               key !== '!GLOBAL_TESTSUITE_STOP_ON_ERROR' &&
               key !== '!LAST_DOWNLOADED_FILE_NAME' &&
+              key !== '!CAPTURE_HIDE_GUI' &&
               !/^!COL\d+$/i.test(key)
     },
     readonly: [
@@ -263,6 +338,10 @@ export default function varsFactory (name = DEFAULT_KEY, options = {}, initial =
       '!WAITFORVISIBLE':    isBoolean,
       '!STRINGESCAPE':      isBoolean,
       '!GLOBAL_TESTSUITE_STOP_ON_ERROR': isBoolean,
+      // false = desktop captures INCLUDE the extension UI (side panel and IDE
+      // window) instead of hiding it behind the capture cover — the switch
+      // the ClearSidebarLogViaGUI demos flip. Unset/true = hide (default).
+      '!CAPTURE_HIDE_GUI':  isBoolean,
       '!CVSCOPE':           (val) => [ComputerVisionType.Browser, ComputerVisionType.Desktop, ComputerVisionType.DesktopScreenCapture].indexOf(val) !== -1
     },
     normalize: (key, val) => {
@@ -280,6 +359,7 @@ export default function varsFactory (name = DEFAULT_KEY, options = {}, initial =
         case '!WAITFORVISIBLE':
         case '!STRINGESCAPE':
         case '!GLOBAL_TESTSUITE_STOP_ON_ERROR':
+        case '!CAPTURE_HIDE_GUI':
         case '!OCRSCALE':
         case '!OCRTABLEEXTRACTION':
           return acceptStringTrueFalse(val)

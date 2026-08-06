@@ -493,6 +493,14 @@ const bindEvents = () => {
           )
 
         return pActiveTab.then(tab => {
+          // Never retarget the run onto a browser-internal or another
+          // extension's tab (an adblocker's "blocked" page, chrome:// ...) —
+          // the next capture/injection/CDP attach would die on "Cannot access
+          // a chrome-extension:// URL". Prefer a web tab from the same window.
+          const isWebTab = t => t && /^(https?|file):/i.test(t.url || '')
+          if (!isWebTab(tab) && win && win.tabs) {
+            tab = win.tabs.find(t => t.id !== tabId && isWebTab(t)) || tab
+          }
           if (tab && tab.id) {
             // This is the main purpose for this callback: Update tabIds.toPlay to new active tab
             updateState(setIn(['tabIds', 'toPlay'], tab.id))
@@ -1020,6 +1028,25 @@ const onRequestAsync = async (cmd, args) => {
           if(e == "Error: Missing activeTab permission"){
             throw new Error('Error E144: Screenshot permission issue. To fix, please reload extension.' +
               'To do so, go to extension settings and turn the blue switch OFF and then ON again.')
+          }
+          // captureVisibleTab shoots the WINDOW's ACTIVE tab, not the play
+          // tab. When another extension's page (chrome-extension://...) or a
+          // browser-internal page took over the active slot mid-run, Chrome
+          // refuses with "Cannot access a chrome-extension:// URL of
+          // different extension" & co (regression: bahn.de macro). Skip the
+          // foreign tab gracefully: re-activate the play tab and retry.
+          if (/cannot access/i.test(msg)) {
+            return getState()
+              .then(state => Ext.tabs.get(state.tabIds.toPlay).catch(() => null))
+              .then(playTab => {
+                if (retriesLeft > 0 && playTab && !playTab.active && /^(https?|file):/i.test(playTab.url || '')) {
+                  log('captureVisibleTab blocked by a non-capturable active tab — re-activating play tab', playTab.id)
+                  return activateTab(playTab.id, true)
+                    .then(() => new Promise(resolve => setTimeout(resolve, 300)))
+                    .then(() => captureWithRetry(retriesLeft - 1))
+                }
+                throw new Error('Error E145: Screenshot failed - the active tab is a browser-internal page or belongs to another extension, so it cannot be captured (' + msg + '). Switch back to the web page being automated and run the macro again.')
+              })
           }
           throw e;
         })
@@ -2430,7 +2457,14 @@ const markFreshInstall = () => {
       // first install from an update, and the setup dialog was
       // recommending the upgrade path to brand new users.
       macroFreshInstall: true,
-      showClassicMacros: false
+      showClassicMacros: false,
+      // Same marker restoreConfig() stamps: this config was born at install,
+      // not carried over from an earlier build. On Chrome this write races
+      // initUpgradeDetectionByVersion's config read (onInstalled fires on the
+      // same background start), and without the marker losing that race made
+      // a brand-new profile look like a pre-marker upgrade — welcome page
+      // PLUS the NEW badge / what's-new.
+      configBornFresh: true
     })
   })
 
@@ -2495,11 +2529,13 @@ const initUpgradeDetectionByVersion = () => {
         // the "what's new" page (opens on the next toolbar click) like any
         // other update; markUpgraded is idempotent, so Chrome reaching here
         // after onInstalled('update') already fired is harmless.
-        // A config WITH configBornFresh is NOT an existing profile: on
-        // Firefox the sidebar auto-opens at install (open_at_install) and
-        // its restoreConfig() write races this very read — before the marker
-        // existed, losing that race misread every fresh Firefox profile as
-        // an upgrade and silently skipped the welcome page.
+        // A config WITH configBornFresh is NOT an existing profile: two
+        // install-time writes race this very read — on Firefox the sidebar
+        // auto-opens at install (open_at_install) and restoreConfig() writes
+        // a config; on Chrome markFreshInstall() from onInstalled('install')
+        // does. Before the marker existed, losing either race misread a
+        // brand-new profile as an upgrade (Firefox: welcome page silently
+        // skipped; Chrome: what's-new armed on top of the welcome page).
         if (existingConfig && Object.keys(existingConfig).length > 0 && !existingConfig.configBornFresh) {
           return markUpgraded()
         }

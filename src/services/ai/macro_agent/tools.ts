@@ -116,8 +116,18 @@ export const MACRO_AGENT_TOOLS: Array<{ name: string; description: string; param
   },
   {
     name: 'screenshot',
-    description: 'Returns a screenshot of the visible part of the current browser tab. The result states the image size in pixels; coordinates passed to save_element_image / save_relative_image are absolute pixels in this image, origin at the top-left corner.',
-    parameters: { type: 'object', properties: {}, required: [] }
+    description: 'Returns a screenshot of the visible part of the current browser tab. The result states the image size in pixels; coordinates passed to save_element_image / save_relative_image are absolute pixels in this image, origin at the top-left corner. Pass scope: "desktop" to capture the WHOLE SCREEN instead (needs the RealUser XModule) — use it to see and verify desktop automation (uiv.desktop.*, XRun): check where a native window sits, whether it has focus, and what its display really shows. The extension panel is covered dark during a desktop capture, so its own text never pollutes the image.',
+    parameters: {
+      type: 'object',
+      properties: {
+        scope: {
+          type: 'string',
+          enum: ['browser', 'desktop'],
+          description: 'Optional. "browser" (default) = visible part of the current tab; "desktop" = the whole screen via the XModule.'
+        }
+      },
+      required: []
+    }
   },
   {
     name: 'save_relative_image',
@@ -243,7 +253,7 @@ function extractPageDigest() {
 export interface MacroAgentToolsParams {
   logMessage: (message: string, userOrAi?: ComputerUseMessageType, isActionOrResult?: 'action' | 'result') => void
   shouldStop: () => boolean
-  captureScreenShotFunction: () => Promise<ArrayBuffer>
+  captureScreenShotFunction: (opts?: { desktop?: boolean }) => Promise<ArrayBuffer>
 }
 
 // commands that make a macro "visual" — used to guard against the agent
@@ -289,7 +299,7 @@ export class MacroAgentTools {
         case 'get_page':
           return await this.getPage(args && args.url)
         case 'screenshot':
-          return await this.screenshot()
+          return await this.screenshot(!!(args && args.scope === 'desktop'))
         case 'save_element_image':
           return await this.saveElementImage(args)
         case 'save_relative_image':
@@ -853,10 +863,10 @@ export class MacroAgentTools {
     }
   }
 
-  private screenshot = async (): Promise<MacroAgentToolResult> => {
-    this.params.logMessage('Taking screenshot', 'user', 'result')
+  private screenshot = async (desktop: boolean = false): Promise<MacroAgentToolResult> => {
+    this.params.logMessage(desktop ? 'Taking desktop screenshot' : 'Taking screenshot', 'user', 'result')
 
-    const raw = await this.params.captureScreenShotFunction()
+    const raw = await this.params.captureScreenShotFunction(desktop ? { desktop: true } : undefined)
     if (!raw) {
       return { text: 'Error: failed to take a screenshot.', isError: true }
     }
@@ -870,7 +880,8 @@ export class MacroAgentTools {
     }
 
     const base64Image = Buffer.from(processed.scaledBuffer).toString('base64')
-    return { text: `Screenshot of the current browser tab (${processed.scaledWidth}x${processed.scaledHeight} px, coordinates are absolute pixels in this image):`, base64Image }
+    const what = desktop ? 'the whole desktop/screen' : 'the current browser tab'
+    return { text: `Screenshot of ${what} (${processed.scaledWidth}x${processed.scaledHeight} px, coordinates are absolute pixels in this image):`, base64Image }
   }
 
   private saveElementImage = async (args: any): Promise<MacroAgentToolResult> => {

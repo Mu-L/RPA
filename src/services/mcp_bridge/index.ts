@@ -242,9 +242,11 @@ class McpBridgeClient {
         // the bridge's cancel message (Claude Code hit Esc) stops a running
         // script; the player run is stopped via the same flag in tools.ts
         shouldStop: () => this.currentCallId != null && this.cancelledIds.has(this.currentCallId),
-        captureScreenShotFunction: async () => {
+        captureScreenShotFunction: async (opts?: { desktop?: boolean }) => {
           const vars = getVarsInstance()
-          const isDesktop = (store.getState().config as any).cvScope === 'desktop'
+          // the tool's scope: "desktop" wins; otherwise follow the CV scope
+          // setting like the classic commands do
+          const isDesktop = !!(opts && opts.desktop) || (store.getState().config as any).cvScope === 'desktop'
           const shot = await captureScreenShot({ vars, isDesktop })
           if (!shot) throw new Error('screenshot capture failed')
           return shot

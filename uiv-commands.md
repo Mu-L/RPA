@@ -155,12 +155,14 @@ Basics of the JS API (details in the AI system prompt and
   only). If a loop is truly unavoidable, re-run the finder inside it — never
   re-read a match found before the loop.
 - Variables are shared with the classic engine — **special `!` variables
-  included**: `uiv.getVar('!COL1')` after a `csvRead`,
+  included**: `uiv.getVar('!LASTCOMMANDOK')`,
   `uiv.setVar('!TIMEOUT_PAGELOAD', 60)`. Same pool the `${...}` syntax uses,
   same names. See [Special variables](#special-variables). The exceptions are
   table-macros-only: `!URL` — in JS ask the page
-  (`uiv.eval('return location.href')`) — and `!CURRENT_TAB_NUMBER` — in JS the
-  `uiv.tabs.*` calls return the position.
+  (`uiv.eval('return location.href')`) — `!CURRENT_TAB_NUMBER` — in JS the
+  `uiv.tabs.*` calls return the position — and the `csvRead` family
+  (`!COL1…`, `!CSVREAD*`, `!csvLine`) — in JS `uiv.csv.read(file)` returns the
+  rows as a real array.
 
 ## The native `uiv.*` API
 
@@ -227,6 +229,7 @@ Three or more calls of one tier in a row read better aliased —
 | `uiv.sleep(ms \| '2s' \| '1m')` | wait a fixed time — **last resort**: finders, `uiv.open` and navigating clicks already wait by themselves. Sleeps ≥1.5s show a countdown in the status bar, like the finder auto-waits |
 | `uiv.exit(reason?)` | end the run **early, as a success** — the graceful ending for guard clauses ("wrong browser", "nothing to do today"): reports green, logs the reason, keeps the last `uiv.banner` up. The **failed** ending stays `throw new Error(...)` — red run, banner cleared. Never use it to paper over a failed check |
 | `uiv.getVar(name[, default])` / `uiv.setVar(name, value)` | shared variable pool, special `!` variables included — see [Special variables](#special-variables) |
+| `uiv.clipboard.read()` / `uiv.clipboard.write(text)` | the **OS clipboard**, read fresh / replaced — the precise way to get a value out of a native app or selection: `uiv.desktop.type('${KEY_CTRL+KEY_C}'); const v = uiv.clipboard.read()` beats OCR every time. (`uiv.getVar/setVar('!CLIPBOARD')` are aliases) |
 | `uiv.csv.read(file)` | rows as a real 2D array — `[['a','b'], …]` |
 | `uiv.csv.append(file, row)` | add one row (or an array of rows); creates the file if new |
 | `uiv.csv.write(file, rows)` | overwrite with a 2D array |
@@ -237,7 +240,7 @@ Three or more calls of one tier in a row read better aliased —
 | `uiv.exportToDownloads(name)` | copy a file out of UI.Vision storage into the browser's **Downloads** folder — `.png`, `.csv` or `log` |
 | `uiv.download(what[, opts])` | download a file from the **web** into the browser's Downloads folder and **return the name it got on disk**. Three forms: a locator (`uiv.download('css=a.installer')` — "save link as": the element's `href`/`src`, no click; also the way to download images), a plain URL, or a **function** for downloads only a click can start (JS blobs, POST exports): `uiv.download(function () { uiv.page.click('id=export'); }, {as: 'report.csv'})` — the trigger runs between arming and waiting, so its download is captured, renamed and awaited. Options: `{as: 'name.ext'}` rename, `{timeout: 60}` seconds for completion (default `!TIMEOUT_DOWNLOAD`), `{wait: false}` fire-and-forget. Replaces the classic `onDownload`/`saveItem` pair and reading `!LAST_DOWNLOADED_FILE_NAME` by hand |
 | `uiv.ai.ask(prompt, {images})` | one round trip — text (+images) in, text out. Answers a question; **touches nothing**. `{json: true}` returns a **parsed object/array** instead of prose: the model is told to answer JSON-only and the reply is parsed with one corrective retry — use it whenever the answer feeds code, not a log line |
-| `uiv.ai.find(question)` | screenshot + question → a **match** — the fourth finder, alongside `$` / `findImage` / `ocr.findText`. Does **not** auto-wait: each attempt is a model call |
+| `uiv.ai.find(question[, opts])` | screenshot + question → a **match** — the fourth finder, alongside `$` / `findImage` / `ocr.findText`. Does **not** auto-wait: each attempt is a model call. `{scope: 'desktop'}` sends the model a **whole-screen** shot and returns screen coordinates — the way to ai.find native UI (OS dialogs, menus); per call, no `XDesktopAutomation` toggle needed |
 
 > **How accurate is `uiv.ai.find`?** Measured against targets at known positions:
 > coordinates land within roughly **1–2% of the image size** — fine for a button,
@@ -347,20 +350,29 @@ var ok = uiv.getVar('!LASTCOMMANDOK');         // result of the last command
 var url = uiv.eval('return location.href');    // NOT !URL — see rule 4
 ```
 
-Five rules make this predictable:
+Six rules make this predictable:
 
-1. **Read them after a command, not before.** `!` variables are filled in by
-   UI.Vision commands, so before the first `uiv.*` call that dispatches one
-   (`open`, `click`, `eval`, `run`, …) none of them is set and `getVar` throws.
+1. **Environment facts are always readable; results come after their command.**
+   `!BROWSER`, `!OS`, the `!TIMEOUT_*` values, `!OCRLANGUAGE`/`!OCRENGINE` and
+   `!CVSCOPE` are pre-seeded before the first script line — a browser guard
+   clause at the top of a macro just works. RESULT variables
+   (`!XRUN_EXITCODE`, `!STATUSOK`, `!LAST_DOWNLOADED_FILE_NAME`, …) are filled
+   in by commands: read them right after the `uiv.*` call that produces them,
+   before that `getVar` throws.
 2. **`getVar` fails loudly.** An unknown name (`'!TIMEOOUT_WAIT'`) and a
    variable that is not set yet both throw, instead of silently returning
    `undefined` and turning into `NaN` three lines later. When "unset" is a
-   legitimate state, pass a default and opt out: `uiv.getVar('!IMAGEX', 0)`.
-3. **Result variables are short-lived.** `!IMAGEX/Y`, `!OCRX/Y/WIDTH/HEIGHT`,
-   `!AI1`–`!AI4` and `!STATUSOK` are reset by the next `uiv.*` call that runs a
-   command — read them immediately after the call that produces them and keep
-   the value in a JS variable. (`!IMAGEWIDTH` / `!IMAGEHEIGHT` are the
-   exception: they survive.)
+   legitimate state, pass a default and opt out:
+   `uiv.getVar('!LAST_DOWNLOADED_FILE_NAME', null)`.
+3. **Match data comes from the finder, not from variables.** `!IMAGEX/Y`,
+   `!IMAGEWIDTH/HEIGHT`, `!OCRX/Y/WIDTH/HEIGHT` and `!AI1`–`!AI4` throw in
+   JS — they are how one table command hands its match to the next, and a JS
+   finder **returns** its match: `m.x` / `m.y` is the click point, `m.rect`
+   the box, `uiv.ai.find(question)` returns the match `!AI1`–`!AI4` carried.
+   A fixed offset from a match is `uiv.offset(m, dx, dy)` — the JS form of
+   the `*Relative` targets, in every scope. `!STATUSOK` stays readable but is
+   reset by the next `uiv.*` call that runs a command — read it immediately
+   and keep the value in a JS variable.
 4. **`!URL` throws — read the page instead.** Only commands that go through the
    classic player refresh it, so in a script it holds the *previous* page after
    `uiv.page.click(match)`, `uiv.desktop.*` or an OCR call, and it is one command
@@ -377,21 +389,32 @@ Five rules make this predictable:
    `current: true` — indexes 1-based, left to right, what the tab bar shows
    (the classic variable was 0-based). `${!CURRENT_TAB_NUMBER}` passed to
    `uiv.run` fails the same way. Table macros keep both, unchanged.
+6. **CSV data comes from `uiv.csv.read`, not variables.** The whole `csvRead`
+   bookkeeping family — `!COL1…`, `!CSVREADSTATUS`, `!CSVREADMAXROW`,
+   `!CSVREADLINENUMBER`, `!csvLine` — throws in JS, read **and** write: it is
+   how table commands pass rows to each other, and a script has arrays for
+   that. `var rows = uiv.csv.read('data.csv')` — `rows[0][0]` is what `!COL1`
+   held on row 1, `rows.length` replaces `!CSVREADMAXROW`, the loop index
+   replaces `!CSVREADLINENUMBER`, and a missing file throws instead of setting
+   `!CSVREADSTATUS`. The same applies to the classic loop counters `!TIMES` /
+   `!FOREACH` (a JS loop has its own counter) and to `!VISUALSEARCHAREA` /
+   `!STOREDIMAGERECT` (pass `{area: …}` to the finder call itself). All of
+   them keep working unchanged in table macros.
 
 | Variable | | |
 |---|---|---|
 | `!URL` | table macros only | URL of the current page — throws in JS, use `uiv.eval('return location.href')` |
 | `!CURRENT_TAB_NUMBER` | table macros only | 0-based index of the play tab — throws in JS, use `uiv.tabs.list()` (the `current: true` entry, 1-based) |
 | `!LASTCOMMANDOK`, `!STATUSOK` | read-only / writable | result of the last command |
-| `!COL1`, `!COL2`, … | read-only | current CSV row after `csvRead` |
-| `!CSVREADSTATUS`, `!CSVREADMAXROW`, `!CSVREADLINENUMBER` | mixed | CSV read state |
-| `!IMAGEX`, `!IMAGEY`, `!IMAGEWIDTH`, `!IMAGEHEIGHT` | writable | last visual match |
-| `!OCRX`, `!OCRY`, `!OCRWIDTH`, `!OCRHEIGHT` | writable | last OCR match |
-| `!AI1`–`!AI4` | writable | AI command results |
+| `!COL1`, `!COL2`, … | table macros only | current CSV row after `csvRead` — throws in JS, use `uiv.csv.read(file)` |
+| `!CSVREADSTATUS`, `!CSVREADMAXROW`, `!CSVREADLINENUMBER` | table macros only | CSV read state — throws in JS, `uiv.csv.read` returns all rows at once |
+| `!IMAGEX`, `!IMAGEY`, `!IMAGEWIDTH`, `!IMAGEHEIGHT` | table macros only | last visual match — throws in JS, the finder returns the match (`m.x`, `m.rect`) |
+| `!OCRX`, `!OCRY`, `!OCRWIDTH`, `!OCRHEIGHT` | table macros only | last OCR match — throws in JS, `uiv.ocr.findText` returns the match |
+| `!AI1`–`!AI4` | table macros only | AI command results — throws in JS, `uiv.ai.find(question)` returns the match |
 | `!TIMEOUT_PAGELOAD`, `!TIMEOUT_WAIT`, `!TIMEOUT_MACRO`, `!TIMEOUT_DOWNLOAD` | writable | timeouts, in seconds |
 | `!REPLAYSPEED` | writable | `FAST` / `MEDIUM` / `SLOW` |
 | `!ERRORIGNORE` | writable | keep going after an error |
-| `!CLIPBOARD` | bridge only | `uiv.setVar` writes the *variable*, not the OS clipboard — use `uiv.run('store', text, '!CLIPBOARD')` |
+| `!CLIPBOARD` | read/write | the **OS clipboard** — alias of `uiv.clipboard.read()` / `uiv.clipboard.write(text)` (prefer those in scripts): e.g. `uiv.desktop.type('${KEY_CTRL+KEY_C}')` then `uiv.clipboard.read()` extracts a value from a native app without OCR |
 | `!LAST_DOWNLOADED_FILE_NAME` | read-only | most recent download |
 | `!BROWSER`, `!OS` | read-only | environment |
 
@@ -458,9 +481,7 @@ All plain JavaScript — these table commands have **no `uiv.` form at all**:
 | `visualSearch` | `uiv.findImage('button.png')` / `uiv.findImages('button.png', {minScore: 0.8})` |
 | `visualAssert` | `uiv.findImage('button.png')` — throws when not found |
 | `visualGetPixelColor` | `uiv.run('visualGetPixelColor', 'x,y', 'var')` |
-| `visionLimitSearchArea` | `uiv.run('visionLimitSearchArea', 'viewport'/'full'/'area=x1,y1,x2,y2')` |
-| `visionLimitSearchAreaRelative` | `uiv.run('visionLimitSearchAreaRelative', 'green_pink.png')` |
-| `visionLimitSearchAreabyTextRelative` | `uiv.run('visionLimitSearchAreabyTextRelative', 'word#R…')` |
+| `visionLimitSearchArea` (and its `*Relative` variants) | **blocked in scripts** — a setting on line 12 must not silently change what "find" means on line 40. Pass the region per call instead: `uiv.findImage('handle.png', {area: match \| {x, y, width, height}})`, same `{area}` on `uiv.ocr.findText(s)` and `uiv.ocr.read` |
 | `OCRSearch` | `uiv.ocr.findTexts('Checkout', {required:false}).length` |
 | `OCRExtractRelative` | compose it: find the anchor, read the region next to it — `var t = uiv.findImage('img.png'); var v = uiv.ocr.read({area: {x: t.rect.left + t.rect.width, y: t.rect.top, width: 120, height: t.rect.height}});` (legacy `uiv.run('OCRExtractRelative', 'img.png', 'var')` still works) |
 | `OCRExtractbyTextRelative` | `uiv.run('OCRExtractbyTextRelative', 'word#R…', 'var')` |
@@ -504,7 +525,7 @@ Same files the CSV tab and the classic `csvRead`/`csvSave` commands use; the
 |---|---|
 | `executeScript` | `uiv.eval('return …')` (page world) |
 | `executeScript_Sandbox` | **not needed** — the whole script *is* the sandbox engine; just write JS |
-| `run` (call another macro) | `uiv.run('run', 'MacroName')` (a native `uiv.runMacro` is planned) |
+| `run` (call another macro) | **rejected in scripts** — the classic `run` hands the called macro to the classic player's loop, which a script does not use, so it would silently never execute. Reuse code with an include: `// @include <folder path>/shared.js` splices the file in before the script compiles (`uiv.main` is `true` only in the file that was started) |
 | `echo` | `uiv.log('text', 'green')` |
 | `prompt` | `uiv.run('prompt', 'question@default', 'var')` + `uiv.getVar('var')` |
 | `assertAlert` / `assertConfirmation` / `assertPrompt` | `uiv.run('assertAlert', expected)` etc. |
@@ -521,12 +542,12 @@ methods are browser-scope (CDP) by design:
 
 | Table command | JS |
 |---|---|
-| `XDesktopAutomation` | `uiv.run('XDesktopAutomation', 'true'/'false')` |
+| `XDesktopAutomation` | classic macros only — in a script, scope is **per call**: `{scope: 'desktop'}` on the finders and on `uiv.ai.find`, `uiv.desktop.*` for input. The toggle is sticky global state (the same trap as `visionLimitSearchArea`); `uiv.run('XDesktopAutomation', ...)` still works for converted macros but new scripts should not need it |
 | `XClick` / `XClickText` / `XClickRelative` / `XClickTextRelative` | `XClickText` composes natively: `uiv.desktop.click(uiv.ocr.findText('OK', {scope: 'desktop'}))` — screen-pixel OCR matches feed the desktop tier. The rest: `uiv.run('XClick', target)` etc. |
 | `XMove` / `XMoveText` / `XMoveRelative` / `XMoveTextRelative` | `uiv.run('XMove', target)` etc. |
 | `XType` | `uiv.run('XType', 'text${KEY_ENTER}')` |
 | `XMouseWheel` | `uiv.run('XMouseWheel', delta)` |
-| `XRun` / `XRunAndWait` | `uiv.run('XRun', 'app.exe', 'args')` |
+| `XRun` / `XRunAndWait` | `uiv.run('XRun', 'app.exe', 'args')` — launching does **not** focus the new window, and AppActivate-style helper scripts are refused by the Windows foreground lock. Focus with a real OS click on the window's title bar before typing: `uiv.desktop.click(uiv.ocr.findText('Window*Title', {scope: 'desktop'}))`. UWP/Store apps launch better via shell activation: `uiv.run('XRun', 'explorer.exe', 'shell:appsFolder\<AUMID>')`. Note: desktop capture/OCR/clicks cover the **primary display only** |
 
 ## AI commands
 

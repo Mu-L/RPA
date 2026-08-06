@@ -11,9 +11,10 @@ import * as C from './common/constant'
 import csIpc from './common/ipc/ipc_cs'
 import { getPlayer } from './common/player'
 import Sidepanel from './containers/sidepanel'
-import { isNoDisplay } from './recomputed'
+import { isNoDisplay, isOcrInDesktopMode } from './recomputed'
 import { FocusArea } from './reducers/state'
 import { Actions } from '@/actions/simple_actions'
+import { store } from '@/redux'
 
 class SidepanelApp extends Component {
   hideBackupAlert = () => {
@@ -73,6 +74,10 @@ class SidepanelApp extends Component {
     store.dispatch(Actions.setReplaySpeedOverrideToFastMode(true))
   }
 
+  showGUIForOCR = () => {
+    store.dispatch(Actions.setOcrInDesktopMode(false))
+  }
+
   render () {
     if (this.props.noDisplay) {
       return (
@@ -104,6 +109,25 @@ class SidepanelApp extends Component {
         <div className="app-inner">
           <Sidepanel />
         </div>
+        {/* solid cover while a desktop screenshot/OCR/vision capture runs — the
+            panel shows macro source and chat text, and an uncovered panel gets
+            OCR-matched by the very search it is running (same flag as the IDE
+            window's overlay in app.js) */}
+        {this.props.ocrInDesktopMode ? (
+          <div className="app no-display ocr-overlay">
+            <div className="sidepanel content">
+              <div className="status">Desktop capture in progress</div>
+              <Button.Group className="simple-actions">
+                <Button size="large" onClick={() => { const p = this.getPlayer(); if (p) p.stop() }}>
+                  <span>Stop</span>
+                </Button>
+                <Button size="large" onClick={this.showGUIForOCR}>
+                  <span>Show GUI</span>
+                </Button>
+              </Button.Group>
+            </div>
+          </div>
+        ) : null}
       </div>
     )
   }
@@ -113,7 +137,8 @@ export default connect(
   state => ({
     ui: state.ui,
     player: state.player,
-    noDisplay: isNoDisplay(state)
+    noDisplay: isNoDisplay(state),
+    ocrInDesktopMode: isOcrInDesktopMode(state)
   }),
   dispatch => bindActionCreators({...actions}, dispatch)
 )(SidepanelApp)
